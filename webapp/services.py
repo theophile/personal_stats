@@ -343,7 +343,7 @@ class StatsService:
                 position_map = self._fetch_id_name_map("positions")
 
                 position_counter: Counter[int] = Counter()
-                combinations: list[list[int]] = []
+                entry_positions: list[list[int]] = []
 
                 for entry_id in entry_ids:
                     position_ids = sorted(
@@ -356,37 +356,30 @@ class StatsService:
                     )
                     if not position_ids:
                         continue
-                    combinations.append(position_ids)
+                    entry_positions.append(position_ids)
                     position_counter.update(position_ids)
         except sqlite3.Error as exc:
             raise DataSourceError(f"Failed to query upset data: {exc}") from exc
 
-        top_position_ids = [pid for pid, _ in position_counter.most_common(max_positions)]
-        if not top_position_ids:
+        top_positions = [pid for pid, _ in position_counter.most_common(max_positions)]
+        if not top_positions:
             return pd.DataFrame()
 
-        combo_counter: Counter[tuple[int, ...]] = Counter()
-        for position_ids in combinations:
-            kept = tuple(pid for pid in top_position_ids if pid in position_ids)
-            if not kept:
-                continue
-            combo_counter[kept] += 1
+        binary_matrix: list[tuple[int, ...]] = []
+        for positions in entry_positions:
+            binary_row = tuple(1 if pid in positions else 0 for pid in top_positions)
+            binary_matrix.append(binary_row)
 
-        filtered_combos = [combo for combo, count in combo_counter.items() if count >= min_instances]
-        if not filtered_combos:
-            return pd.DataFrame()
+        if min_instances > 1:
+            counts = Counter(binary_matrix)
+            binary_matrix = [item for item in binary_matrix if counts[item] >= min_instances]
 
-        top_position_names = [position_map.get(pid, f"Unknown({pid})") for pid in top_position_ids]
-        rows: list[dict[str, int]] = []
-        for combo in filtered_combos:
-            combo_set = set(combo)
-            row = {
-                position_map.get(pid, f"Unknown({pid})"): (1 if pid in combo_set else 0)
-                for pid in top_position_ids
-            }
-            rows.append(row)
+        top_position_names = [position_map.get(pid, f"Unknown({pid})") for pid in top_positions]
+        df = pd.DataFrame(binary_matrix, columns=top_position_names)
+        if df.empty:
+            return df
 
-        return pd.DataFrame(rows, columns=top_position_names)
+        return df[df.sum().sort_values(ascending=True).keys()]
 
     def location_room_sankey_dataframe(self, filters: SearchFilters):
         self.ensure_expected_schema()

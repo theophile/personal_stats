@@ -246,7 +246,7 @@ class PersonalStatsApp:
     def refresh_position_upset_chart(self, filters: SearchFilters) -> None:
         try:
             df = self.service.position_upset_dataframe(filters)
-            fig = position_upset_chart(df)
+            fig = position_upset_chart(df, filters.start_date, filters.end_date)
         except DataSourceError as exc:
             fig = Figure()
             fig.update_layout(title="Position Combination UpSet View (data source error)")

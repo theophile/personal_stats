@@ -131,7 +131,11 @@ def position_combinations_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def position_upset_chart(df: pd.DataFrame) -> go.Figure:
+def position_upset_chart(
+    df: pd.DataFrame,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> go.Figure:
     if df.empty:
         fig = go.Figure()
         fig.update_layout(title="Position Combination UpSet View (no results)")
@@ -155,13 +159,21 @@ def position_upset_chart(df: pd.DataFrame) -> go.Figure:
         horizontal_spacing=0.15,
         marker_size=14,
     )
+
+    fig.update_layout(yaxis4={"tickfont": {"family": "Noto Color Emoji", "size": 16}})
+
+    subtitle = None
+    if start_date and end_date:
+        subtitle = f"Data from {start_date} to {end_date}"
+
+    title_text = "Frequency of Sex Position Combinations"
+    if subtitle:
+        title_text += f"<br><sub>{subtitle}</sub>"
+
     fig.update_layout(
-        title="Position Combination UpSet View",
-        width=1100,
-        height=700,
-    )
-    fig.update_layout(
-        yaxis4={"tickfont": {"size": 12}},
+        title={"text": title_text, "y": 0.95, "x": 0.5, "xanchor": "center"},
+        width=1400,
+        height=800,
     )
     return fig
 

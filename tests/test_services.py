@@ -115,7 +115,8 @@ class StatsServiceTest(unittest.TestCase):
         upset_df = self.service.position_upset_dataframe(SearchFilters())
         self.assertIn("Position A", upset_df.columns)
         self.assertIn("Position B", upset_df.columns)
-        self.assertEqual(int(upset_df.sum(numeric_only=True).sum()), 2)
+        self.assertEqual(len(upset_df), 2)
+        self.assertTrue(set(upset_df.to_numpy().flatten()).issubset({0, 1}))
 
         sankey_df = self.service.location_room_sankey_dataframe(SearchFilters())
         self.assertIn("location", sankey_df.columns)
