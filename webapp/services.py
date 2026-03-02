@@ -331,7 +331,7 @@ class StatsService:
         self.ensure_expected_schema()
         entry_ids = self._entry_ids_for_filters(filters)
         if not entry_ids:
-            return pd.DataFrame(columns=["combination", "count"])
+            return pd.DataFrame()
 
         if max_positions < 1:
             max_positions = 1
@@ -363,21 +363,30 @@ class StatsService:
 
         top_position_ids = [pid for pid, _ in position_counter.most_common(max_positions)]
         if not top_position_ids:
-            return pd.DataFrame(columns=["combination", "count"])
+            return pd.DataFrame()
 
-        combo_counter: Counter[str] = Counter()
+        combo_counter: Counter[tuple[int, ...]] = Counter()
         for position_ids in combinations:
-            kept_names = [position_map.get(pid, f"Unknown({pid})") for pid in top_position_ids if pid in position_ids]
-            if not kept_names:
+            kept = tuple(pid for pid in top_position_ids if pid in position_ids)
+            if not kept:
                 continue
-            combo_counter[" + ".join(kept_names)] += 1
+            combo_counter[kept] += 1
 
-        rows = [
-            {"combination": combination, "count": count}
-            for combination, count in combo_counter.items()
-            if count >= min_instances
-        ]
-        return pd.DataFrame(rows)
+        filtered_combos = [combo for combo, count in combo_counter.items() if count >= min_instances]
+        if not filtered_combos:
+            return pd.DataFrame()
+
+        top_position_names = [position_map.get(pid, f"Unknown({pid})") for pid in top_position_ids]
+        rows: list[dict[str, int]] = []
+        for combo in filtered_combos:
+            combo_set = set(combo)
+            row = {
+                position_map.get(pid, f"Unknown({pid})"): (1 if pid in combo_set else 0)
+                for pid in top_position_ids
+            }
+            rows.append(row)
+
+        return pd.DataFrame(rows, columns=top_position_names)
 
     def location_room_sankey_dataframe(self, filters: SearchFilters):
         self.ensure_expected_schema()

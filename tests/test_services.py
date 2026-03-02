@@ -113,8 +113,9 @@ class StatsServiceTest(unittest.TestCase):
         self.assertEqual(int(combo_df["count"].sum()), 2)
 
         upset_df = self.service.position_upset_dataframe(SearchFilters())
-        self.assertIn("combination", upset_df.columns)
-        self.assertEqual(int(upset_df["count"].sum()), 2)
+        self.assertIn("Position A", upset_df.columns)
+        self.assertIn("Position B", upset_df.columns)
+        self.assertEqual(int(upset_df.sum(numeric_only=True).sum()), 2)
 
         sankey_df = self.service.location_room_sankey_dataframe(SearchFilters())
         self.assertIn("location", sankey_df.columns)
