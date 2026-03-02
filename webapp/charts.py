@@ -160,7 +160,7 @@ def position_upset_chart(
         marker_size=14,
     )
 
-    fig.update_layout(yaxis4={"tickfont": {"family": "Noto Color Emoji", "size": 16}})
+    fig.update_layout(yaxis4={"tickfont": {"size": 12}})
 
     subtitle = None
     if start_date and end_date:
@@ -172,8 +172,8 @@ def position_upset_chart(
 
     fig.update_layout(
         title={"text": title_text, "y": 0.95, "x": 0.5, "xanchor": "center"},
-        width=1400,
-        height=800,
+        width=1000,
+        height=500,
     )
     return fig
 

@@ -329,7 +329,8 @@ class StatsService:
 
     def position_upset_dataframe(self, filters: SearchFilters, max_positions: int = 6, min_instances: int = 1):
         self.ensure_expected_schema()
-        entry_ids = self._entry_ids_for_filters(filters)
+        filtered_rows = self.search_entries(filters, limit=100000)
+        entry_ids = [int(r["entry_id"]) for r in filtered_rows if r.get("entry_id") is not None]
         if not entry_ids:
             return pd.DataFrame()
 

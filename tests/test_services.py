@@ -122,6 +122,10 @@ class StatsServiceTest(unittest.TestCase):
         self.assertIn("location", sankey_df.columns)
         self.assertIn("room", sankey_df.columns)
 
+    def test_upset_dataframe_respects_filters(self):
+        filtered = self.service.position_upset_dataframe(SearchFilters(partner_id=1))
+        self.assertEqual(len(filtered), 1)
+
     def test_build_report_and_export_json(self):
         report = self.service.build_report(SearchFilters())
         self.assertEqual(report["metrics"]["entries"], 2)
