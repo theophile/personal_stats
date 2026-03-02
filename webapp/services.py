@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import sqlite3
-
 import pandas as pd
+from pathlib import Path
+import sqlite3
+import tempfile
+import csv
 
 from webapp.db import ReadOnlyDatabase
 
@@ -44,6 +47,9 @@ class SearchFilters:
     start_date: str | None = None
     end_date: str | None = None
     note_keyword: str | None = None
+    partner_id: int | None = None
+    position_id: int | None = None
+    place_id: int | None = None
 
 
 class StatsService:
@@ -63,7 +69,14 @@ class StatsService:
             raise DataSourceError(f"Could not inspect database tables: {exc}") from exc
 
     def ensure_expected_schema(self) -> None:
-        expected = {"entries", "entry_partner", "entry_position", "entry_place", "partners", "positions"}
+        expected = {
+            "entries",
+            "entry_partner",
+            "entry_position",
+            "entry_place",
+            "partners",
+            "positions",
+        }
         available = set(self.list_tables())
         missing = sorted(expected - available)
         if missing:
@@ -79,6 +92,22 @@ class StatsService:
 
     def search_entries(self, filters: SearchFilters, limit: int = 300) -> list[dict]:
         self.ensure_expected_schema()
+
+    def partner_options(self) -> list[tuple[int, str]]:
+        self.ensure_expected_schema()
+        mapping = self._fetch_id_name_map("partners")
+        return sorted(mapping.items(), key=lambda x: x[1].lower())
+
+    def position_options(self) -> list[tuple[int, str]]:
+        self.ensure_expected_schema()
+        mapping = self._fetch_id_name_map("positions")
+        return sorted(mapping.items(), key=lambda x: x[1].lower())
+
+    def place_options(self) -> list[tuple[int, str]]:
+        self.ensure_expected_schema()
+        return sorted(PLACE_MAPPING.items(), key=lambda x: x[1].lower())
+
+    def _build_where_clause(self, filters: SearchFilters) -> tuple[str, list[object]]:
         clauses = []
         params: list[object] = []
 
@@ -92,7 +121,28 @@ class StatsService:
             clauses.append("LOWER(COALESCE(e.note, '')) LIKE ?")
             params.append(f"%{filters.note_keyword.lower()}%")
 
+        if filters.partner_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM entry_partner ep WHERE ep.entry_id = e.entry_id AND ep.partner_id = ?)"
+            )
+            params.append(filters.partner_id)
+        if filters.position_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM entry_position epo WHERE epo.entry_id = e.entry_id AND epo.position_id = ?)"
+            )
+            params.append(filters.position_id)
+        if filters.place_id is not None:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM entry_place epl WHERE epl.entry_id = e.entry_id AND epl.place_id = ?)"
+            )
+            params.append(filters.place_id)
+
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        return where, params
+
+    def search_entries(self, filters: SearchFilters, limit: int = 300) -> list[dict]:
+        self.ensure_expected_schema()
+        where, params = self._build_where_clause(filters)
 
         query = f"""
             SELECT e.entry_id, e.date, e.duration, e.note, e.rating, e.initiator,
@@ -155,11 +205,53 @@ class StatsService:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         query = f"SELECT date, total_org_partner FROM entries {where} ORDER BY date"
 
+    def summary_metrics(self, filters: SearchFilters) -> dict[str, int]:
+        rows = self.search_entries(filters, limit=100000)
+        return {
+            "entries": len(rows),
+            "total_partner_orgasms": sum(int(r.get("total_org_partner") or 0) for r in rows),
+            "total_my_orgasms": sum(int(r.get("total_org") or 0) for r in rows),
+        }
+
+    def export_entries_csv(self, filters: SearchFilters) -> Path:
+        rows = self.search_entries(filters, limit=100000)
+        tmp_path = self.temp_export_path("entries_export_", ".csv")
+
+        if not rows:
+            with tmp_path.open("w", newline="", encoding="utf-8") as f:
+                f.write("\n")
+            return tmp_path
+
+        fieldnames = list(rows[0].keys())
+        with tmp_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        return tmp_path
+
+    def temp_export_path(self, prefix: str, suffix: str) -> Path:
+        tmp = tempfile.NamedTemporaryFile(prefix=prefix, suffix=suffix, delete=False)
+        tmp_path = Path(tmp.name)
+        tmp.close()
+        return tmp_path
+
+    def partner_orgasms_timeseries(self, filters: SearchFilters):
+        self.ensure_expected_schema()
+        where, params = self._build_where_clause(filters)
+        query = f"SELECT e.date, e.total_org_partner FROM entries e {where} ORDER BY e.date"
+
         try:
             with self.db.cursor() as cur:
                 rows = cur.execute(query, params).fetchall()
         except sqlite3.Error as exc:
             raise DataSourceError(f"Failed to query time series data: {exc}") from exc
+
+        try:
+            import pandas as pd
+        except ModuleNotFoundError as exc:
+            raise DataSourceError(
+                "pandas is required for timeseries/chart features. Install dependencies from requirements.txt"
+            ) from exc
 
         df = pd.DataFrame(rows, columns=["date", "total_org_partner"])
         if df.empty:
@@ -169,3 +261,13 @@ class StatsService:
         daily = df.groupby("date", as_index=False)["total_org_partner"].sum()
         daily["trend"] = daily["total_org_partner"].rolling(window=30, min_periods=1).mean()
         return daily
+
+    def ratings_dataframe(self, filters: SearchFilters):
+        rows = self.search_entries(filters, limit=100000)
+        try:
+            import pandas as pd
+        except ModuleNotFoundError as exc:
+            raise DataSourceError(
+                "pandas is required for chart features. Install dependencies from requirements.txt"
+            ) from exc
+        return pd.DataFrame(rows)

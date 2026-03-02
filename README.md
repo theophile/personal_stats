@@ -1,6 +1,6 @@
-# Personal Stats Webapp Rewrite (Phase 1)
+# Personal Stats Webapp Rewrite
 
-This repository now includes an initial NiceGUI-based web application scaffold.
+This repository includes a NiceGUI-based web application for browsing and charting an immutable personal-stats SQLite export.
 
 ## Run
 
@@ -15,12 +15,23 @@ Optional environment variables:
 - `PERSONAL_STATS_HOST` (default: `0.0.0.0`)
 - `PERSONAL_STATS_PORT` (default: `8080`)
 
-## What is implemented
+## Implemented (current stage)
 
 - Read-only database connector (`mode=ro`) for immutable source DB.
-- Filtered entry browser (date range + note keyword).
-- Interactive Plotly chart for partner orgasms with 30-day trend.
-- Friendly schema diagnostics in the UI when the selected DB path/file does not contain the expected tables.
+- Schema validation with user-facing diagnostics if expected tables are missing.
+- Filtered entry browser with:
+  - date range,
+  - note keyword,
+  - partner,
+  - position,
+  - place.
+- Summary metric cards for filtered datasets (entries, my orgasms, partner orgasms).
+- Interactive Plotly charts:
+  - partner orgasms over time with 30-day trend,
+  - rating distribution histogram.
+- Export actions:
+  - filtered table as CSV,
+  - partner-orgasms chart as PNG.
 
 ## Troubleshooting
 
@@ -41,3 +52,6 @@ Expected core tables include:
 - Additional filters (partner/position/place)
 - Additional dynamic charts and report views
 - Export controls for chart/data outputs
+- Multi-chart dashboard pages and report builder flows
+- Saved filter presets
+- Better chart export naming and report bundles
