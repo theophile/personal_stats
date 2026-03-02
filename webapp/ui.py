@@ -6,6 +6,7 @@ from webapp.charts import (
     location_room_sankey_chart,
     partner_orgasms_chart,
     position_combinations_chart,
+    position_upset_chart,
     position_frequency_chart,
     rating_histogram_chart,
     sex_streaks_chart,
@@ -24,6 +25,7 @@ class PersonalStatsApp:
         self.position_plot_container = None
         self.position_combo_plot_container = None
         self.location_room_plot_container = None
+        self.position_upset_plot_container = None
         self.status_label = None
         self.entries_metric = None
         self.partner_metric = None
@@ -124,6 +126,10 @@ class PersonalStatsApp:
             self.position_combo_plot_container = ui.column().classes("w-full")
 
         with ui.card().classes("w-full"):
+            ui.label("Chart: Position UpSet")
+            self.position_upset_plot_container = ui.column().classes("w-full")
+
+        with ui.card().classes("w-full"):
             ui.label("Chart: Location/Room Links")
             self.location_room_plot_container = ui.column().classes("w-full")
 
@@ -168,6 +174,7 @@ class PersonalStatsApp:
         self.refresh_streak_chart(filters)
         self.refresh_position_chart(filters)
         self.refresh_position_combinations_chart(filters)
+        self.refresh_position_upset_chart(filters)
         self.refresh_location_room_chart(filters)
 
     def refresh_partner_org_chart(self, filters: SearchFilters) -> None:
@@ -234,6 +241,19 @@ class PersonalStatsApp:
 
         self.position_combo_plot_container.clear()
         with self.position_combo_plot_container:
+            ui.plotly(fig)
+
+    def refresh_position_upset_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.position_upset_dataframe(filters)
+            fig = position_upset_chart(df)
+        except DataSourceError as exc:
+            fig = Figure()
+            fig.update_layout(title="Position Combination UpSet View (data source error)")
+            self._set_status(str(exc))
+
+        self.position_upset_plot_container.clear()
+        with self.position_upset_plot_container:
             ui.plotly(fig)
 
     def refresh_location_room_chart(self, filters: SearchFilters) -> None:

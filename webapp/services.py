@@ -326,6 +326,59 @@ class StatsService:
             [{"combination": name, "count": count} for name, count in combo_counter.items()]
         )
 
+
+    def position_upset_dataframe(self, filters: SearchFilters, max_positions: int = 6, min_instances: int = 1):
+        self.ensure_expected_schema()
+        entry_ids = self._entry_ids_for_filters(filters)
+        if not entry_ids:
+            return pd.DataFrame(columns=["combination", "count"])
+
+        if max_positions < 1:
+            max_positions = 1
+        if min_instances < 1:
+            min_instances = 1
+
+        try:
+            with self.db.cursor() as cur:
+                position_map = self._fetch_id_name_map("positions")
+
+                position_counter: Counter[int] = Counter()
+                combinations: list[list[int]] = []
+
+                for entry_id in entry_ids:
+                    position_ids = sorted(
+                        {
+                            int(r[0])
+                            for r in cur.execute(
+                                "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
+                            ).fetchall()
+                        }
+                    )
+                    if not position_ids:
+                        continue
+                    combinations.append(position_ids)
+                    position_counter.update(position_ids)
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query upset data: {exc}") from exc
+
+        top_position_ids = [pid for pid, _ in position_counter.most_common(max_positions)]
+        if not top_position_ids:
+            return pd.DataFrame(columns=["combination", "count"])
+
+        combo_counter: Counter[str] = Counter()
+        for position_ids in combinations:
+            kept_names = [position_map.get(pid, f"Unknown({pid})") for pid in top_position_ids if pid in position_ids]
+            if not kept_names:
+                continue
+            combo_counter[" + ".join(kept_names)] += 1
+
+        rows = [
+            {"combination": combination, "count": count}
+            for combination, count in combo_counter.items()
+            if count >= min_instances
+        ]
+        return pd.DataFrame(rows)
+
     def location_room_sankey_dataframe(self, filters: SearchFilters):
         self.ensure_expected_schema()
         entry_ids = self._entry_ids_for_filters(filters)
@@ -395,6 +448,7 @@ class StatsService:
                 "sex_streak_segments": int(len(self.sex_streaks_dataframe(filters))),
                 "distinct_positions": int(len(self.position_frequency_dataframe(filters))),
                 "distinct_position_combinations": int(len(self.position_combinations_dataframe(filters))),
+                "upset_combinations": int(len(self.position_upset_dataframe(filters))),
                 "location_room_links": int(len(self.location_room_sankey_dataframe(filters))),
             },
         }

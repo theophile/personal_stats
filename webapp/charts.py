@@ -131,6 +131,63 @@ def position_combinations_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def position_upset_chart(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if df.empty:
+        fig.update_layout(title="Position Combination UpSet View (no results)")
+        return fig
+
+    chart_df = df.sort_values("count", ascending=False).head(20).copy()
+    combo_labels = chart_df["combination"].tolist()
+
+    unique_positions: list[str] = []
+    for combo in combo_labels:
+        for item in [s.strip() for s in combo.split("+") if s.strip()]:
+            if item not in unique_positions:
+                unique_positions.append(item)
+
+    # Bar layer (combination frequencies)
+    fig.add_trace(
+        go.Bar(
+            x=combo_labels,
+            y=chart_df["count"],
+            name="Combination count",
+            marker_color="royalblue",
+            yaxis="y1",
+        )
+    )
+
+    # Matrix layer (which positions participate in each combination)
+    for position in unique_positions:
+        y_vals = []
+        for combo in combo_labels:
+            members = [s.strip() for s in combo.split("+") if s.strip()]
+            y_vals.append(position if position in members else None)
+
+        fig.add_trace(
+            go.Scatter(
+                x=combo_labels,
+                y=y_vals,
+                mode="markers",
+                marker={"size": 8, "color": "black"},
+                showlegend=False,
+                yaxis="y2",
+                hovertemplate="Combination: %{x}<br>Position: %{y}<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        title="Position Combination UpSet View (Top 20)",
+        width=1100,
+        height=650,
+        xaxis={"title": "Position combinations", "tickangle": -25},
+        yaxis={"title": "Combination count", "domain": [0.45, 1.0]},
+        yaxis2={"title": "Positions", "domain": [0.0, 0.35], "type": "category"},
+        margin={"t": 80, "b": 110},
+    )
+    return fig
+
+
 def location_room_sankey_chart(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     if df.empty:

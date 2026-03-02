@@ -32,6 +32,7 @@ Optional environment variables:
   - sex streaks timeline (sex vs no-sex streak segments),
   - position frequency bar chart,
   - position-combination frequency chart (top combinations),
+  - position UpSet-style combination view,
   - location/room Sankey diagram.
 - Export actions:
   - filtered table as CSV,

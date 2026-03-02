@@ -112,6 +112,10 @@ class StatsServiceTest(unittest.TestCase):
         self.assertIn("combination", combo_df.columns)
         self.assertEqual(int(combo_df["count"].sum()), 2)
 
+        upset_df = self.service.position_upset_dataframe(SearchFilters())
+        self.assertIn("combination", upset_df.columns)
+        self.assertEqual(int(upset_df["count"].sum()), 2)
+
         sankey_df = self.service.location_room_sankey_dataframe(SearchFilters())
         self.assertIn("location", sankey_df.columns)
         self.assertIn("room", sankey_df.columns)
@@ -123,6 +127,7 @@ class StatsServiceTest(unittest.TestCase):
         self.assertEqual(report["date_range"]["max"], "2024.01.02")
         self.assertIn("chart_summaries", report)
         self.assertIn("distinct_positions", report["chart_summaries"])
+        self.assertIn("upset_combinations", report["chart_summaries"])
 
         json_path = self.service.export_report_json(SearchFilters())
         self.assertTrue(json_path.exists())
