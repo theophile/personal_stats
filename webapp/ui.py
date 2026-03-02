@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from nicegui import ui
 from plotly.graph_objs import Figure
-from webapp.charts import partner_orgasms_chart, rating_histogram_chart
+from webapp.charts import (
+    location_room_sankey_chart,
+    partner_orgasms_chart,
+    position_combinations_chart,
+    position_upset_chart,
+    position_frequency_chart,
+    rating_histogram_chart,
+    sex_streaks_chart,
+)
 from webapp.config import DEFAULT_DB_PATH
 from webapp.services import DataSourceError, SearchFilters, StatsService
 
@@ -13,6 +21,11 @@ class PersonalStatsApp:
         self.table = None
         self.plot_container = None
         self.rating_plot_container = None
+        self.streak_plot_container = None
+        self.position_plot_container = None
+        self.position_combo_plot_container = None
+        self.location_room_plot_container = None
+        self.position_upset_plot_container = None
         self.status_label = None
         self.entries_metric = None
         self.partner_metric = None
@@ -100,6 +113,26 @@ class PersonalStatsApp:
             ui.label("Chart: Rating Distribution")
             self.rating_plot_container = ui.column().classes("w-full")
 
+        with ui.card().classes("w-full"):
+            ui.label("Chart: Sex Streaks")
+            self.streak_plot_container = ui.column().classes("w-full")
+
+        with ui.card().classes("w-full"):
+            ui.label("Chart: Position Frequency")
+            self.position_plot_container = ui.column().classes("w-full")
+
+        with ui.card().classes("w-full"):
+            ui.label("Chart: Position Combinations")
+            self.position_combo_plot_container = ui.column().classes("w-full")
+
+        with ui.card().classes("w-full"):
+            ui.label("Chart: Position UpSet")
+            self.position_upset_plot_container = ui.column().classes("w-full")
+
+        with ui.card().classes("w-full"):
+            ui.label("Chart: Location/Room Links")
+            self.location_room_plot_container = ui.column().classes("w-full")
+
         default_filters = SearchFilters(start_date="2024.01.01", end_date="2024.12.31")
         self.refresh_all(default_filters)
 
@@ -138,6 +171,11 @@ class PersonalStatsApp:
     def refresh_charts(self, filters: SearchFilters) -> None:
         self.refresh_partner_org_chart(filters)
         self.refresh_rating_chart(filters)
+        self.refresh_streak_chart(filters)
+        self.refresh_position_chart(filters)
+        self.refresh_position_combinations_chart(filters)
+        self.refresh_position_upset_chart(filters)
+        self.refresh_location_room_chart(filters)
 
     def refresh_partner_org_chart(self, filters: SearchFilters) -> None:
         try:
@@ -163,6 +201,72 @@ class PersonalStatsApp:
 
         self.rating_plot_container.clear()
         with self.rating_plot_container:
+            ui.plotly(fig)
+
+
+    def refresh_streak_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.sex_streaks_dataframe(filters)
+            fig = sex_streaks_chart(df)
+        except DataSourceError as exc:
+            fig = Figure()
+            fig.update_layout(title="Sex Streaks Over Time (data source error)")
+            self._set_status(str(exc))
+
+        self.streak_plot_container.clear()
+        with self.streak_plot_container:
+            ui.plotly(fig)
+
+    def refresh_position_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.position_frequency_dataframe(filters)
+            fig = position_frequency_chart(df)
+        except DataSourceError as exc:
+            fig = Figure()
+            fig.update_layout(title="Frequency of Sex Positions (data source error)")
+            self._set_status(str(exc))
+
+        self.position_plot_container.clear()
+        with self.position_plot_container:
+            ui.plotly(fig)
+
+    def refresh_position_combinations_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.position_combinations_dataframe(filters)
+            fig = position_combinations_chart(df)
+        except DataSourceError as exc:
+            fig = Figure()
+            fig.update_layout(title="Position Combination Frequency (data source error)")
+            self._set_status(str(exc))
+
+        self.position_combo_plot_container.clear()
+        with self.position_combo_plot_container:
+            ui.plotly(fig)
+
+    def refresh_position_upset_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.position_upset_dataframe(filters)
+            fig = position_upset_chart(df, filters.start_date, filters.end_date)
+        except DataSourceError as exc:
+            fig = Figure()
+            fig.update_layout(title="Position Combination UpSet View (data source error)")
+            self._set_status(str(exc))
+
+        self.position_upset_plot_container.clear()
+        with self.position_upset_plot_container:
+            ui.plotly(fig)
+
+    def refresh_location_room_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.location_room_sankey_dataframe(filters)
+            fig = location_room_sankey_chart(df)
+        except DataSourceError as exc:
+            fig = Figure()
+            fig.update_layout(title="Frequency of Location/Room Combinations (data source error)")
+            self._set_status(str(exc))
+
+        self.location_room_plot_container.clear()
+        with self.location_room_plot_container:
             ui.plotly(fig)
 
     def export_csv(self, filters: SearchFilters) -> None:

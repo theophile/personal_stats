@@ -97,11 +97,43 @@ class StatsServiceTest(unittest.TestCase):
         self.assertTrue(out.exists())
         self.assertGreater(os.path.getsize(out), 0)
 
+
+    def test_additional_chart_dataframes(self):
+        streak_df = self.service.sex_streaks_dataframe(SearchFilters())
+        self.assertIn("signed_length", streak_df.columns)
+        self.assertGreaterEqual(len(streak_df), 1)
+        self.assertIsInstance(streak_df.iloc[0]["start_date"], str)
+
+        position_df = self.service.position_frequency_dataframe(SearchFilters())
+        self.assertIn("position", position_df.columns)
+        self.assertEqual(int(position_df["count"].sum()), 2)
+
+        combo_df = self.service.position_combinations_dataframe(SearchFilters())
+        self.assertIn("combination", combo_df.columns)
+        self.assertEqual(int(combo_df["count"].sum()), 2)
+
+        upset_df = self.service.position_upset_dataframe(SearchFilters())
+        self.assertIn("Position A", upset_df.columns)
+        self.assertIn("Position B", upset_df.columns)
+        self.assertEqual(len(upset_df), 2)
+        self.assertTrue(set(upset_df.to_numpy().flatten()).issubset({0, 1}))
+
+        sankey_df = self.service.location_room_sankey_dataframe(SearchFilters())
+        self.assertIn("location", sankey_df.columns)
+        self.assertIn("room", sankey_df.columns)
+
+    def test_upset_dataframe_respects_filters(self):
+        filtered = self.service.position_upset_dataframe(SearchFilters(partner_id=1))
+        self.assertEqual(len(filtered), 1)
+
     def test_build_report_and_export_json(self):
         report = self.service.build_report(SearchFilters())
         self.assertEqual(report["metrics"]["entries"], 2)
         self.assertEqual(report["date_range"]["min"], "2024.01.01")
         self.assertEqual(report["date_range"]["max"], "2024.01.02")
+        self.assertIn("chart_summaries", report)
+        self.assertIn("distinct_positions", report["chart_summaries"])
+        self.assertIn("upset_combinations", report["chart_summaries"])
 
         json_path = self.service.export_report_json(SearchFilters())
         self.assertTrue(json_path.exists())
