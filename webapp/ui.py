@@ -72,6 +72,7 @@ class PersonalStatsApp:
                 ui.button("Run Search", on_click=lambda: self.refresh_all(current_filters()))
                 ui.button("Export Table CSV", on_click=lambda: self.export_csv(current_filters()))
                 ui.button("Export Chart PNG", on_click=lambda: self.export_chart_png(current_filters()))
+                ui.button("Export Report JSON", on_click=lambda: self.export_report_json(current_filters()))
 
         with ui.card().classes("w-full"):
             ui.label("Entries")
@@ -134,14 +135,6 @@ class PersonalStatsApp:
             self.table.update()
             self._set_status(str(exc))
 
-    def refresh_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.partner_orgasms_timeseries(filters)
-            fig = partner_orgasms_chart(df)
-            self._set_status("")
-        except DataSourceError as exc:
-            from plotly.graph_objs import Figure
-
     def refresh_charts(self, filters: SearchFilters) -> None:
         self.refresh_partner_org_chart(filters)
         self.refresh_rating_chart(filters)
@@ -177,6 +170,14 @@ class PersonalStatsApp:
             csv_path = self.service.export_entries_csv(filters)
             ui.download(str(csv_path), filename="entries_export.csv")
             self._set_status(f"CSV export ready: {csv_path}")
+        except DataSourceError as exc:
+            self._set_status(str(exc))
+
+    def export_report_json(self, filters: SearchFilters) -> None:
+        try:
+            report_path = self.service.export_report_json(filters)
+            ui.download(str(report_path), filename="report_export.json")
+            self._set_status(f"Report JSON export ready: {report_path}")
         except DataSourceError as exc:
             self._set_status(str(exc))
 

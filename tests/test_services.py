@@ -97,6 +97,16 @@ class StatsServiceTest(unittest.TestCase):
         self.assertTrue(out.exists())
         self.assertGreater(os.path.getsize(out), 0)
 
+    def test_build_report_and_export_json(self):
+        report = self.service.build_report(SearchFilters())
+        self.assertEqual(report["metrics"]["entries"], 2)
+        self.assertEqual(report["date_range"]["min"], "2024.01.01")
+        self.assertEqual(report["date_range"]["max"], "2024.01.02")
+
+        json_path = self.service.export_report_json(SearchFilters())
+        self.assertTrue(json_path.exists())
+        self.assertGreater(os.path.getsize(json_path), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

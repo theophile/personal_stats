@@ -31,7 +31,8 @@ Optional environment variables:
   - rating distribution histogram.
 - Export actions:
   - filtered table as CSV,
-  - partner-orgasms chart as PNG.
+  - partner-orgasms chart as PNG,
+  - structured summary report as JSON.
 
 ## Troubleshooting
 
@@ -49,9 +50,6 @@ Expected core tables include:
 
 ## Next steps
 
-- Additional filters (partner/position/place)
-- Additional dynamic charts and report views
-- Export controls for chart/data outputs
-- Multi-chart dashboard pages and report builder flows
 - Saved filter presets
+- Multi-chart dashboard/report page layouts
 - Better chart export naming and report bundles

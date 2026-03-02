@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import sqlite3
 import pandas as pd
 from pathlib import Path
 import sqlite3
 import tempfile
 import csv
+import json
+from collections import Counter
 
 from webapp.db import ReadOnlyDatabase
 
@@ -120,7 +121,6 @@ class StatsService:
         if filters.note_keyword:
             clauses.append("LOWER(COALESCE(e.note, '')) LIKE ?")
             params.append(f"%{filters.note_keyword.lower()}%")
-
         if filters.partner_id is not None:
             clauses.append(
                 "EXISTS (SELECT 1 FROM entry_partner ep WHERE ep.entry_id = e.entry_id AND ep.partner_id = ?)"
@@ -212,6 +212,41 @@ class StatsService:
             "total_partner_orgasms": sum(int(r.get("total_org_partner") or 0) for r in rows),
             "total_my_orgasms": sum(int(r.get("total_org") or 0) for r in rows),
         }
+
+    def build_report(self, filters: SearchFilters, top_n: int = 5) -> dict:
+        rows = self.search_entries(filters, limit=100000)
+        metrics = self.summary_metrics(filters)
+
+        partner_counter: Counter[str] = Counter()
+        position_counter: Counter[str] = Counter()
+        place_counter: Counter[str] = Counter()
+
+        for row in rows:
+            for key, counter in (("partners", partner_counter), ("positions", position_counter), ("places", place_counter)):
+                raw = row.get(key) or ""
+                for item in [s.strip() for s in str(raw).split(",") if s.strip()]:
+                    counter[item] += 1
+
+        dates = [r.get("date") for r in rows if r.get("date")]
+
+        return {
+            "filters": filters.__dict__,
+            "metrics": metrics,
+            "date_range": {
+                "min": min(dates) if dates else None,
+                "max": max(dates) if dates else None,
+            },
+            "top_partners": [{"name": n, "count": c} for n, c in partner_counter.most_common(top_n)],
+            "top_positions": [{"name": n, "count": c} for n, c in position_counter.most_common(top_n)],
+            "top_places": [{"name": n, "count": c} for n, c in place_counter.most_common(top_n)],
+        }
+
+    def export_report_json(self, filters: SearchFilters) -> Path:
+        report = self.build_report(filters)
+        path = self.temp_export_path("report_export_", ".json")
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        return path
 
     def export_entries_csv(self, filters: SearchFilters) -> Path:
         rows = self.search_entries(filters, limit=100000)
