@@ -97,11 +97,31 @@ class StatsServiceTest(unittest.TestCase):
         self.assertTrue(out.exists())
         self.assertGreater(os.path.getsize(out), 0)
 
+
+    def test_additional_chart_dataframes(self):
+        streak_df = self.service.sex_streaks_dataframe(SearchFilters())
+        self.assertIn("signed_length", streak_df.columns)
+        self.assertGreaterEqual(len(streak_df), 1)
+
+        position_df = self.service.position_frequency_dataframe(SearchFilters())
+        self.assertIn("position", position_df.columns)
+        self.assertEqual(int(position_df["count"].sum()), 2)
+
+        combo_df = self.service.position_combinations_dataframe(SearchFilters())
+        self.assertIn("combination", combo_df.columns)
+        self.assertEqual(int(combo_df["count"].sum()), 2)
+
+        sankey_df = self.service.location_room_sankey_dataframe(SearchFilters())
+        self.assertIn("location", sankey_df.columns)
+        self.assertIn("room", sankey_df.columns)
+
     def test_build_report_and_export_json(self):
         report = self.service.build_report(SearchFilters())
         self.assertEqual(report["metrics"]["entries"], 2)
         self.assertEqual(report["date_range"]["min"], "2024.01.01")
         self.assertEqual(report["date_range"]["max"], "2024.01.02")
+        self.assertIn("chart_summaries", report)
+        self.assertIn("distinct_positions", report["chart_summaries"])
 
         json_path = self.service.export_report_json(SearchFilters())
         self.assertTrue(json_path.exists())

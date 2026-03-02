@@ -37,6 +37,8 @@ PLACE_MAPPING = {
     21: "Ship",
     22: "Public",
 }
+ROOM_IDS = set(range(0, 10))
+LOCATION_IDS = set(range(10, 23))
 
 
 class DataSourceError(RuntimeError):
@@ -90,9 +92,6 @@ class StatsService:
         with self.db.cursor() as cur:
             rows = cur.execute(f"SELECT * FROM {table}").fetchall()
         return {int(row[0]): str(row[2]) for row in rows}
-
-    def search_entries(self, filters: SearchFilters, limit: int = 300) -> list[dict]:
-        self.ensure_expected_schema()
 
     def partner_options(self) -> list[tuple[int, str]]:
         self.ensure_expected_schema()
@@ -190,20 +189,172 @@ class StatsService:
         except sqlite3.Error as exc:
             raise DataSourceError(f"Failed to query entries: {exc}") from exc
 
-    def partner_orgasms_timeseries(self, filters: SearchFilters) -> pd.DataFrame:
+    def _entry_ids_for_filters(self, filters: SearchFilters) -> list[int]:
         self.ensure_expected_schema()
-        clauses = []
-        params: list[object] = []
+        where, params = self._build_where_clause(filters)
+        query = f"SELECT e.entry_id FROM entries e {where} ORDER BY e.date"
+        try:
+            with self.db.cursor() as cur:
+                rows = cur.execute(query, params).fetchall()
+            return [int(r[0]) for r in rows]
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query filtered entry IDs: {exc}") from exc
 
-        if filters.start_date:
-            clauses.append("date >= ?")
-            params.append(filters.start_date)
-        if filters.end_date:
-            clauses.append("date <= ?")
-            params.append(filters.end_date)
+    def partner_orgasms_timeseries(self, filters: SearchFilters):
+        self.ensure_expected_schema()
+        where, params = self._build_where_clause(filters)
+        query = f"SELECT e.date, e.total_org_partner FROM entries e {where} ORDER BY e.date"
 
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        query = f"SELECT date, total_org_partner FROM entries {where} ORDER BY date"
+        try:
+            with self.db.cursor() as cur:
+                rows = cur.execute(query, params).fetchall()
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query time series data: {exc}") from exc
+
+        df = pd.DataFrame(rows, columns=["date", "total_org_partner"])
+        if df.empty:
+            return df
+
+        df["date"] = pd.to_datetime(df["date"], format="%Y.%m.%d")
+        daily = df.groupby("date", as_index=False)["total_org_partner"].sum()
+        daily["trend"] = daily["total_org_partner"].rolling(window=30, min_periods=1).mean()
+        return daily
+
+    def ratings_dataframe(self, filters: SearchFilters):
+        rows = self.search_entries(filters, limit=100000)
+        return pd.DataFrame(rows)
+
+    def sex_streaks_dataframe(self, filters: SearchFilters):
+        self.ensure_expected_schema()
+        where, params = self._build_where_clause(filters)
+        query = f"SELECT DISTINCT e.date FROM entries e {where} ORDER BY e.date"
+        try:
+            with self.db.cursor() as cur:
+                rows = cur.execute(query, params).fetchall()
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query streak data: {exc}") from exc
+
+        df = pd.DataFrame(rows, columns=["date"])
+        if df.empty:
+            return pd.DataFrame(columns=["start_date", "length", "signed_length", "type"])
+
+        df["date"] = pd.to_datetime(df["date"], format="%Y.%m.%d")
+        full_range = pd.date_range(start=df["date"].min(), end=df["date"].max(), freq="D")
+        points = pd.DataFrame({"date": full_range})
+        points["sex_occurred"] = points["date"].isin(df["date"]).astype(int)
+
+        streaks = []
+        current_type = None
+        current_start = None
+        current_length = 0
+
+        for _, row in points.iterrows():
+            value = int(row["sex_occurred"])
+            date = row["date"]
+            if current_type is None:
+                current_type, current_start, current_length = value, date, 1
+            elif current_type == value:
+                current_length += 1
+            else:
+                streaks.append((current_start, current_length, current_type))
+                current_type, current_start, current_length = value, date, 1
+
+        if current_type is not None:
+            streaks.append((current_start, current_length, current_type))
+
+        out = pd.DataFrame(streaks, columns=["start_date", "length", "type_flag"])
+        out["type"] = out["type_flag"].map({1: "sex", 0: "no_sex"})
+        out["signed_length"] = out.apply(
+            lambda r: int(r["length"]) if r["type_flag"] == 1 else -int(r["length"]), axis=1
+        )
+        return out[["start_date", "length", "signed_length", "type"]]
+
+    def position_frequency_dataframe(self, filters: SearchFilters):
+        self.ensure_expected_schema()
+        entry_ids = self._entry_ids_for_filters(filters)
+        if not entry_ids:
+            return pd.DataFrame(columns=["position", "count"])
+
+        try:
+            with self.db.cursor() as cur:
+                position_map = self._fetch_id_name_map("positions")
+                counts: Counter[str] = Counter()
+                for entry_id in entry_ids:
+                    position_ids = [
+                        int(r[0])
+                        for r in cur.execute(
+                            "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
+                        ).fetchall()
+                    ]
+                    for pid in position_ids:
+                        counts[position_map.get(pid, f"Unknown({pid})")] += 1
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query position frequency data: {exc}") from exc
+
+        return pd.DataFrame(
+            [{"position": name, "count": count} for name, count in counts.items()]
+        )
+
+    def position_combinations_dataframe(self, filters: SearchFilters):
+        self.ensure_expected_schema()
+        entry_ids = self._entry_ids_for_filters(filters)
+        if not entry_ids:
+            return pd.DataFrame(columns=["combination", "count"])
+
+        try:
+            with self.db.cursor() as cur:
+                position_map = self._fetch_id_name_map("positions")
+                combo_counter: Counter[str] = Counter()
+                for entry_id in entry_ids:
+                    position_ids = sorted(
+                        {
+                            int(r[0])
+                            for r in cur.execute(
+                                "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
+                            ).fetchall()
+                        }
+                    )
+                    if not position_ids:
+                        continue
+                    label = " + ".join(position_map.get(pid, f"Unknown({pid})") for pid in position_ids)
+                    combo_counter[label] += 1
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query position combination data: {exc}") from exc
+
+        return pd.DataFrame(
+            [{"combination": name, "count": count} for name, count in combo_counter.items()]
+        )
+
+    def location_room_sankey_dataframe(self, filters: SearchFilters):
+        self.ensure_expected_schema()
+        entry_ids = self._entry_ids_for_filters(filters)
+        if not entry_ids:
+            return pd.DataFrame(columns=["location", "room", "count"])
+
+        counter: Counter[tuple[str, str]] = Counter()
+        try:
+            with self.db.cursor() as cur:
+                for entry_id in entry_ids:
+                    place_ids = [
+                        int(r[0])
+                        for r in cur.execute(
+                            "SELECT place_id FROM entry_place WHERE entry_id = ?", (entry_id,)
+                        ).fetchall()
+                    ]
+                    locations = [PLACE_MAPPING[p] for p in place_ids if p in LOCATION_IDS and p in PLACE_MAPPING]
+                    rooms = [PLACE_MAPPING[p] for p in place_ids if p in ROOM_IDS and p in PLACE_MAPPING]
+                    for location in locations:
+                        for room in rooms:
+                            counter[(location, room)] += 1
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query location-room data: {exc}") from exc
+
+        return pd.DataFrame(
+            [
+                {"location": location, "room": room, "count": count}
+                for (location, room), count in counter.items()
+            ]
+        )
 
     def summary_metrics(self, filters: SearchFilters) -> dict[str, int]:
         rows = self.search_entries(filters, limit=100000)
@@ -239,6 +390,12 @@ class StatsService:
             "top_partners": [{"name": n, "count": c} for n, c in partner_counter.most_common(top_n)],
             "top_positions": [{"name": n, "count": c} for n, c in position_counter.most_common(top_n)],
             "top_places": [{"name": n, "count": c} for n, c in place_counter.most_common(top_n)],
+            "chart_summaries": {
+                "sex_streak_segments": int(len(self.sex_streaks_dataframe(filters))),
+                "distinct_positions": int(len(self.position_frequency_dataframe(filters))),
+                "distinct_position_combinations": int(len(self.position_combinations_dataframe(filters))),
+                "location_room_links": int(len(self.location_room_sankey_dataframe(filters))),
+            },
         }
 
     def export_report_json(self, filters: SearchFilters) -> Path:
@@ -269,40 +426,3 @@ class StatsService:
         tmp_path = Path(tmp.name)
         tmp.close()
         return tmp_path
-
-    def partner_orgasms_timeseries(self, filters: SearchFilters):
-        self.ensure_expected_schema()
-        where, params = self._build_where_clause(filters)
-        query = f"SELECT e.date, e.total_org_partner FROM entries e {where} ORDER BY e.date"
-
-        try:
-            with self.db.cursor() as cur:
-                rows = cur.execute(query, params).fetchall()
-        except sqlite3.Error as exc:
-            raise DataSourceError(f"Failed to query time series data: {exc}") from exc
-
-        try:
-            import pandas as pd
-        except ModuleNotFoundError as exc:
-            raise DataSourceError(
-                "pandas is required for timeseries/chart features. Install dependencies from requirements.txt"
-            ) from exc
-
-        df = pd.DataFrame(rows, columns=["date", "total_org_partner"])
-        if df.empty:
-            return df
-
-        df["date"] = pd.to_datetime(df["date"], format="%Y.%m.%d")
-        daily = df.groupby("date", as_index=False)["total_org_partner"].sum()
-        daily["trend"] = daily["total_org_partner"].rolling(window=30, min_periods=1).mean()
-        return daily
-
-    def ratings_dataframe(self, filters: SearchFilters):
-        rows = self.search_entries(filters, limit=100000)
-        try:
-            import pandas as pd
-        except ModuleNotFoundError as exc:
-            raise DataSourceError(
-                "pandas is required for chart features. Install dependencies from requirements.txt"
-            ) from exc
-        return pd.DataFrame(rows)

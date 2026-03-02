@@ -28,11 +28,15 @@ Optional environment variables:
 - Summary metric cards for filtered datasets (entries, my orgasms, partner orgasms).
 - Interactive Plotly charts:
   - partner orgasms over time with 30-day trend,
-  - rating distribution histogram.
+  - rating distribution histogram,
+  - sex streaks timeline (sex vs no-sex streak segments),
+  - position frequency bar chart,
+  - position-combination frequency chart (top combinations),
+  - location/room Sankey diagram.
 - Export actions:
   - filtered table as CSV,
   - partner-orgasms chart as PNG,
-  - structured summary report as JSON.
+  - structured summary report as JSON (including chart summary metrics).
 
 ## Troubleshooting
 
