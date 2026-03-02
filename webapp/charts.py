@@ -71,7 +71,7 @@ def sex_streaks_chart(df: pd.DataFrame) -> go.Figure:
                 width=[max(int(row["length"]), 1) * 86400000],
                 name=name,
                 marker_color="royalblue" if row["type"] == "sex" else "firebrick",
-                hovertemplate="Start: %{x|%Y-%m-%d}<br>Length: " + str(row["length"]) + " day(s)<extra></extra>",
+                hovertemplate="Start: %{x}<br>Length: " + str(row["length"]) + " day(s)<extra></extra>",
                 showlegend=show_legend,
             )
         )

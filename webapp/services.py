@@ -263,6 +263,7 @@ class StatsService:
             streaks.append((current_start, current_length, current_type))
 
         out = pd.DataFrame(streaks, columns=["start_date", "length", "type_flag"])
+        out["start_date"] = out["start_date"].dt.strftime("%Y-%m-%d")
         out["type"] = out["type_flag"].map({1: "sex", 0: "no_sex"})
         out["signed_length"] = out.apply(
             lambda r: int(r["length"]) if r["type_flag"] == 1 else -int(r["length"]), axis=1

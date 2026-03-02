@@ -102,6 +102,7 @@ class StatsServiceTest(unittest.TestCase):
         streak_df = self.service.sex_streaks_dataframe(SearchFilters())
         self.assertIn("signed_length", streak_df.columns)
         self.assertGreaterEqual(len(streak_df), 1)
+        self.assertIsInstance(streak_df.iloc[0]["start_date"], str)
 
         position_df = self.service.position_frequency_dataframe(SearchFilters())
         self.assertIn("position", position_df.columns)
