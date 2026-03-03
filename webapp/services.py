@@ -51,7 +51,7 @@ class SearchFilters:
     end_date: str | None = None
     note_keyword: str | None = None
     partner_id: int | None = None
-    position_id: int | None = None
+    position_ids: list[int] | None = None
     place_id: int | None = None
 
 
@@ -125,11 +125,14 @@ class StatsService:
                 "EXISTS (SELECT 1 FROM entry_partner ep WHERE ep.entry_id = e.entry_id AND ep.partner_id = ?)"
             )
             params.append(filters.partner_id)
-        if filters.position_id is not None:
+        if filters.position_ids:
+            placeholders = ", ".join("?" for _ in filters.position_ids)
             clauses.append(
-                "EXISTS (SELECT 1 FROM entry_position epo WHERE epo.entry_id = e.entry_id AND epo.position_id = ?)"
+                "EXISTS (SELECT 1 FROM entry_position epo "
+                "WHERE epo.entry_id = e.entry_id "
+                f"AND epo.position_id IN ({placeholders}))"
             )
-            params.append(filters.position_id)
+            params.extend(filters.position_ids)
         if filters.place_id is not None:
             clauses.append(
                 "EXISTS (SELECT 1 FROM entry_place epl WHERE epl.entry_id = e.entry_id AND epl.place_id = ?)"

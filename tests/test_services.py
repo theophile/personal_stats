@@ -78,6 +78,14 @@ class StatsServiceTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["entry_id"], 2)
 
+    def test_search_entries_filters_multiple_positions(self):
+        rows = self.service.search_entries(SearchFilters(position_ids=[10, 11]))
+        self.assertEqual(len(rows), 2)
+
+        rows = self.service.search_entries(SearchFilters(position_ids=[10]))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["entry_id"], 1)
+
     def test_summary_metrics(self):
         metrics = self.service.summary_metrics(SearchFilters())
         self.assertEqual(metrics["entries"], 2)
