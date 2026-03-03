@@ -14,6 +14,7 @@ Optional environment variables:
 - `PERSONAL_STATS_DB_PATH` (default: `ascdatabase2.db`)
 - `PERSONAL_STATS_HOST` (default: `0.0.0.0`)
 - `PERSONAL_STATS_PORT` (default: `8080`)
+- `PERSONAL_STATS_UI_RELOAD` (default: `false`)
 
 ## Implemented (current stage)
 
