@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             "Source database spec in the form SOURCE_KEY=DB_PATH. "
+            "For single-source imports you may also pass only DB_PATH. "
             "Example: --source mine=/data/mine.db --source wife=/data/wife.db"
         ),
     )
@@ -59,6 +60,12 @@ def _parse_key_value(spec: str, flag_name: str) -> tuple[str, str]:
     return key, value
 
 
+def _parse_source_spec(spec: str, index: int) -> tuple[str, str]:
+    if "=" in spec:
+        return _parse_key_value(spec, "--source")
+    return f"source{index + 1}", spec.strip()
+
+
 def _build_source_configs(args: argparse.Namespace) -> list[SourceConfig]:
     owner_map: dict[str, str] = {}
     for owner_spec in args.owner:
@@ -66,8 +73,18 @@ def _build_source_configs(args: argparse.Namespace) -> list[SourceConfig]:
         owner_map[key] = name
 
     sources: list[SourceConfig] = []
-    for source_spec in args.source:
-        source_key, db_path = _parse_key_value(source_spec, "--source")
+    seen_keys: set[str] = set()
+    for idx, source_spec in enumerate(args.source):
+        source_key, db_path = _parse_source_spec(source_spec, idx)
+        if not source_key:
+            raise ValueError("--source key cannot be empty")
+        if source_key in seen_keys:
+            raise ValueError(f"Duplicate --source key detected: {source_key}")
+        seen_keys.add(source_key)
+
+        if not db_path:
+            raise ValueError(f"--source path cannot be empty for key '{source_key}'")
+
         owner_name = owner_map.get(source_key)
         if not owner_name:
             owner_name = input(f"Who is the owner/user ('me') for source '{source_key}'? ").strip()

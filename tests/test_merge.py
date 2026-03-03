@@ -1,8 +1,11 @@
 import sqlite3
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
+import merge_databases as merge_cli
 from webapp.merge import SourceConfig, build_master_database
 
 
@@ -156,6 +159,38 @@ class MasterDbBuildTest(unittest.TestCase):
         source_rows = conn.execute("SELECT COUNT(*) FROM source_databases").fetchone()[0]
         self.assertEqual(source_rows, 1)
         conn.close()
+
+
+class MergeCliParsingTest(unittest.TestCase):
+    def test_source_allows_plain_db_path(self):
+        args = Namespace(
+            source=["ascdatabase2.db"],
+            owner=[],
+            out="master.db",
+            duration_tolerance=15,
+            non_interactive=False,
+        )
+        with patch("builtins.input", return_value="Alex"):
+            sources = merge_cli._build_source_configs(args)
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].source_key, "source1")
+        self.assertEqual(sources[0].db_path, Path("ascdatabase2.db"))
+        self.assertEqual(sources[0].owner_name, "Alex")
+
+    def test_source_key_value_still_supported(self):
+        args = Namespace(
+            source=["mine=ascdatabase2.db"],
+            owner=["mine=Alex"],
+            out="master.db",
+            duration_tolerance=15,
+            non_interactive=False,
+        )
+
+        sources = merge_cli._build_source_configs(args)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].source_key, "mine")
+        self.assertEqual(sources[0].owner_name, "Alex")
 
 
 if __name__ == "__main__":

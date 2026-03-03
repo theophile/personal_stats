@@ -58,6 +58,14 @@ The key improvement is **schema design**, not engine replacement: the master DB 
 
 ```bash
 python merge_databases.py \
+  --source /path/to/my.db \
+  --out single_master.db
+```
+
+or with explicit source keys:
+
+```bash
+python merge_databases.py \
   --source mine=/path/to/my.db \
   --source wife=/path/to/wife.db \
   --out merged_master.db
