@@ -141,9 +141,6 @@ class PersonalStatsApp:
             ui.label("Chart: Location/Room Links")
             self.location_room_plot_container = ui.column().classes("w-full")
 
-        for control in (self.start_date, self.end_date, self.note_keyword, self.partner, self.position_ids, self.place):
-            control.on("update:model-value", lambda _e: self._save_filters(self.current_filters()))
-
         initial_filters = self._filters_from_storage()
         self._apply_filters(initial_filters)
         self.refresh_all(initial_filters)
@@ -153,13 +150,19 @@ class PersonalStatsApp:
     def _to_db_date(value: str | None) -> str | None:
         if not value:
             return None
-        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y.%m.%d")
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").strftime("%Y.%m.%d")
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _to_ui_date(value: str | None) -> str | None:
         if not value:
             return None
-        return datetime.strptime(value, "%Y.%m.%d").strftime("%Y-%m-%d")
+        try:
+            return datetime.strptime(value, "%Y.%m.%d").strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            return None
 
     def _default_filters(self) -> SearchFilters:
         return SearchFilters(start_date="2024.01.01", end_date="2024.12.31")
