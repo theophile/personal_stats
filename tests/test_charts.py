@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from webapp.charts import sex_streaks_chart
+from webapp.charts import duration_violin_chart, partner_orgasms_chart, position_association_chart, rolling_anomaly_chart, sex_streaks_chart
 
 
 class SexStreaksChartTest(unittest.TestCase):
@@ -43,6 +43,55 @@ class SexStreaksChartTest(unittest.TestCase):
         fig = sex_streaks_chart(df)
 
         self.assertIsInstance(fig.data[0].x[0], str)
+
+
+class AdditionalChartsTest(unittest.TestCase):
+    def test_partner_chart_adds_milestone_shapes(self):
+        df = pd.DataFrame(
+            [
+                {"date": pd.Timestamp("2024-01-01"), "total_org_partner": 1, "trend": 1.0},
+                {"date": pd.Timestamp("2024-01-02"), "total_org_partner": 2, "trend": 1.5},
+            ]
+        )
+        fig = partner_orgasms_chart(df, milestones=[(pd.Timestamp("2024-01-02"), "Event")])
+        self.assertGreaterEqual(len(fig.layout.shapes or []), 1)
+
+    def test_duration_violin_chart_with_data(self):
+        df = pd.DataFrame(
+            [
+                {"partner": "Alice", "duration": 30},
+                {"partner": "Alice", "duration": 60},
+                {"partner": "Beth", "duration": 20},
+            ]
+        )
+        fig = duration_violin_chart(df)
+        self.assertGreaterEqual(len(fig.data), 1)
+
+    def test_rolling_anomaly_chart_marks_points(self):
+        df = pd.DataFrame(
+            [
+                {"date": pd.Timestamp("2024-01-01"), "value": 1, "baseline": 1.0, "zscore": 0.0, "is_anomaly": 0},
+                {"date": pd.Timestamp("2024-01-02"), "value": 5, "baseline": 2.0, "zscore": 2.5, "is_anomaly": 1},
+            ]
+        )
+        fig = rolling_anomaly_chart(df)
+        self.assertGreaterEqual(len(fig.data), 2)
+
+    def test_position_association_chart(self):
+        df = pd.DataFrame(
+            [
+                {
+                    "antecedent": "A",
+                    "consequent": "B",
+                    "support": 0.5,
+                    "confidence": 0.75,
+                    "lift": 1.25,
+                    "count": 3,
+                }
+            ]
+        )
+        fig = position_association_chart(df)
+        self.assertGreaterEqual(len(fig.data), 1)
 
 
 if __name__ == "__main__":
