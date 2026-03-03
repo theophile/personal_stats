@@ -9,17 +9,31 @@ def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = N
 
     for date, label in milestones:
         try:
-            x_value = pd.to_datetime(date)
+            x_value = pd.to_datetime(date).to_pydatetime()
         except (TypeError, ValueError):
             continue
 
-        fig.add_vline(
+        fig.add_shape(
+            type="line",
+            x0=x_value,
+            x1=x_value,
+            xref="x",
+            y0=0,
+            y1=1,
+            yref="paper",
+            line={"width": 2, "dash": "dot", "color": "darkgreen"},
+        )
+        fig.add_annotation(
             x=x_value,
-            line_width=2,
-            line_dash="dot",
-            line_color="darkgreen",
-            annotation_text=label,
-            annotation_position="top right",
+            y=1,
+            xref="x",
+            yref="paper",
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font={"size": 11, "color": "darkgreen"},
+            bgcolor="rgba(255,255,255,0.75)",
         )
 
 
