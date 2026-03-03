@@ -8,8 +8,13 @@ def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = N
         return
 
     for date, label in milestones:
+        try:
+            x_value = pd.to_datetime(date)
+        except (TypeError, ValueError):
+            continue
+
         fig.add_vline(
-            x=str(date),
+            x=x_value,
             line_width=2,
             line_dash="dot",
             line_color="darkgreen",
