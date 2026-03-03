@@ -66,22 +66,19 @@ class PersonalStatsApp:
 
         with ui.card().classes("w-full"):
             ui.label("Filters").classes("text-lg")
-            with ui.row().classes("w-full gap-4 items-start"):
-                with ui.column().classes("w-full lg:w-[24rem] gap-2"):
-                    with ui.row().classes("w-full gap-2 flex-wrap"):
-                        start_date = ui.date(value="2024-01-01", mask="YYYY-MM-DD").props("label='Start date'").classes("w-full sm:flex-1")
-                        end_date = ui.date(value="2024-12-31", mask="YYYY-MM-DD").props("label='End date'").classes("w-full sm:flex-1")
+            with ui.row().classes("w-full gap-3 items-start flex-wrap"):
+                start_date = ui.date(value="2024-01-01", mask="YYYY-MM-DD").props("label='Start date'").classes("w-full md:w-[14rem]")
+                end_date = ui.date(value="2024-12-31", mask="YYYY-MM-DD").props("label='End date'").classes("w-full md:w-[14rem]")
+                with ui.column().classes("w-full md:flex-1 gap-2"):
                     note_keyword = ui.input("Note keyword contains", placeholder="optional").classes("w-full")
-
-                with ui.row().classes("w-full lg:flex-1 gap-2 items-start"):
-                    partner = ui.select(partner_choices, label="Partner", value="").classes("w-full md:flex-1")
+                    partner = ui.select(partner_choices, label="Partner", value="").classes("w-full")
                     position_ids = ui.select(
                         position_choices,
                         label="Positions",
                         value=[],
                         multiple=True,
-                    ).props("use-chips clearable").classes("w-full md:flex-1")
-                    place = ui.select(place_choices, label="Place", value="").classes("w-full md:flex-1")
+                    ).props("use-chips clearable").classes("w-full")
+                    place = ui.select(place_choices, label="Place", value="").classes("w-full")
 
             def _to_db_date(value: str | None) -> str | None:
                 if not value:
@@ -99,7 +96,7 @@ class PersonalStatsApp:
                     place_id=int(place.value) if place.value else None,
                 )
 
-            with ui.row().classes("w-full gap-2"):
+            with ui.row().classes("w-full gap-2 flex-wrap"):
                 ui.button("Run Search", on_click=lambda: self.refresh_all(current_filters()))
                 ui.button("Export Table CSV", on_click=lambda: self.export_csv(current_filters()))
                 ui.button("Export Chart PNG", on_click=lambda: self.export_chart_png(current_filters()))
