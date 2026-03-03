@@ -17,6 +17,9 @@ from webapp.config import DEFAULT_DB_PATH
 from webapp.services import DataSourceError, SearchFilters, StatsService
 
 
+_LAST_FILTERS: SearchFilters | None = None
+
+
 class PersonalStatsApp:
     def __init__(self, service: StatsService):
         self.service = service
@@ -96,8 +99,32 @@ class PersonalStatsApp:
                     place_id=int(place.value) if place.value else None,
                 )
 
+            def save_and_refresh() -> None:
+                filters = current_filters()
+                global _LAST_FILTERS
+                _LAST_FILTERS = filters
+                self.refresh_all(filters)
+
+            def reset_filters() -> None:
+                global _LAST_FILTERS
+                _LAST_FILTERS = SearchFilters(start_date="2024.01.01", end_date="2024.12.31")
+                start_date.value = "2024-01-01"
+                end_date.value = "2024-12-31"
+                note_keyword.value = ""
+                partner.value = ""
+                position_ids.value = []
+                place.value = ""
+                start_date.update()
+                end_date.update()
+                note_keyword.update()
+                partner.update()
+                position_ids.update()
+                place.update()
+                self.refresh_all(_LAST_FILTERS)
+
             with ui.row().classes("w-full gap-2 flex-wrap"):
-                ui.button("Run Search", on_click=lambda: self.refresh_all(current_filters()))
+                ui.button("Run Search", on_click=save_and_refresh)
+                ui.button("Reset Filters", on_click=reset_filters)
                 ui.button("Export Table CSV", on_click=lambda: self.export_csv(current_filters()))
                 ui.button("Export Chart PNG", on_click=lambda: self.export_chart_png(current_filters()))
                 ui.button("Export Report JSON", on_click=lambda: self.export_report_json(current_filters()))
@@ -149,8 +176,20 @@ class PersonalStatsApp:
             ui.label("Chart: Location/Room Links")
             self.location_room_plot_container = ui.column().classes("w-full")
 
-        default_filters = SearchFilters(start_date="2024.01.01", end_date="2024.12.31")
-        self.refresh_all(default_filters)
+        initial_filters = _LAST_FILTERS or SearchFilters(start_date="2024.01.01", end_date="2024.12.31")
+        start_date.value = datetime.strptime(initial_filters.start_date, "%Y.%m.%d").strftime("%Y-%m-%d") if initial_filters.start_date else None
+        end_date.value = datetime.strptime(initial_filters.end_date, "%Y.%m.%d").strftime("%Y-%m-%d") if initial_filters.end_date else None
+        note_keyword.value = initial_filters.note_keyword or ""
+        partner.value = str(initial_filters.partner_id) if initial_filters.partner_id else ""
+        position_ids.value = initial_filters.position_ids or []
+        place.value = str(initial_filters.place_id) if initial_filters.place_id else ""
+        start_date.update()
+        end_date.update()
+        note_keyword.update()
+        partner.update()
+        position_ids.update()
+        place.update()
+        self.refresh_all(initial_filters)
 
     def _metric_value_label(self, card) -> ui.label:
         return card.default_slot.children[1]

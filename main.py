@@ -16,4 +16,4 @@ def create_app() -> PersonalStatsApp:
 
 if __name__ in {"__main__", "__mp_main__"}:
     create_app()
-    ui.run(host=DEFAULT_HOST, port=DEFAULT_PORT, title="Personal Stats")
+    ui.run(host=DEFAULT_HOST, port=DEFAULT_PORT, title="Personal Stats", reload=False)
