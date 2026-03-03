@@ -169,13 +169,19 @@ class PersonalStatsApp:
             self._set_status(str(exc))
 
     def refresh_charts(self, filters: SearchFilters) -> None:
-        self.refresh_partner_org_chart(filters)
-        self.refresh_rating_chart(filters)
-        self.refresh_streak_chart(filters)
-        self.refresh_position_chart(filters)
-        self.refresh_position_combinations_chart(filters)
-        self.refresh_position_upset_chart(filters)
-        self.refresh_location_room_chart(filters)
+        for refresh_chart in (
+            self.refresh_partner_org_chart,
+            self.refresh_rating_chart,
+            self.refresh_streak_chart,
+            self.refresh_position_chart,
+            self.refresh_position_combinations_chart,
+            self.refresh_position_upset_chart,
+            self.refresh_location_room_chart,
+        ):
+            try:
+                refresh_chart(filters)
+            except Exception as exc:
+                self._set_status(f"Chart refresh failed: {exc}")
 
     def refresh_partner_org_chart(self, filters: SearchFilters) -> None:
         try:
@@ -208,9 +214,9 @@ class PersonalStatsApp:
         try:
             df = self.service.sex_streaks_dataframe(filters)
             fig = sex_streaks_chart(df)
-        except DataSourceError as exc:
+        except Exception as exc:
             fig = Figure()
-            fig.update_layout(title="Sex Streaks Over Time (data source error)")
+            fig.update_layout(title="Sex Streaks Over Time (chart error)")
             self._set_status(str(exc))
 
         self.streak_plot_container.clear()
@@ -221,9 +227,9 @@ class PersonalStatsApp:
         try:
             df = self.service.position_frequency_dataframe(filters)
             fig = position_frequency_chart(df)
-        except DataSourceError as exc:
+        except Exception as exc:
             fig = Figure()
-            fig.update_layout(title="Frequency of Sex Positions (data source error)")
+            fig.update_layout(title="Frequency of Sex Positions (chart error)")
             self._set_status(str(exc))
 
         self.position_plot_container.clear()
@@ -234,9 +240,9 @@ class PersonalStatsApp:
         try:
             df = self.service.position_combinations_dataframe(filters)
             fig = position_combinations_chart(df)
-        except DataSourceError as exc:
+        except Exception as exc:
             fig = Figure()
-            fig.update_layout(title="Position Combination Frequency (data source error)")
+            fig.update_layout(title="Position Combination Frequency (chart error)")
             self._set_status(str(exc))
 
         self.position_combo_plot_container.clear()
@@ -247,9 +253,9 @@ class PersonalStatsApp:
         try:
             df = self.service.position_upset_dataframe(filters)
             fig = position_upset_chart(df, filters.start_date, filters.end_date)
-        except DataSourceError as exc:
+        except Exception as exc:
             fig = Figure()
-            fig.update_layout(title="Position Combination UpSet View (data source error)")
+            fig.update_layout(title="Position Combination UpSet View (chart error)")
             self._set_status(str(exc))
 
         self.position_upset_plot_container.clear()
@@ -260,9 +266,9 @@ class PersonalStatsApp:
         try:
             df = self.service.location_room_sankey_dataframe(filters)
             fig = location_room_sankey_chart(df)
-        except DataSourceError as exc:
+        except Exception as exc:
             fig = Figure()
-            fig.update_layout(title="Frequency of Location/Room Combinations (data source error)")
+            fig.update_layout(title="Frequency of Location/Room Combinations (chart error)")
             self._set_status(str(exc))
 
         self.location_room_plot_container.clear()
