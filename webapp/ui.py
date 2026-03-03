@@ -21,6 +21,7 @@ from webapp.services import DataSourceError, SearchFilters, StatsService
 
 
 _LAST_FILTERS: SearchFilters | None = None
+_LAST_MILESTONES: list[tuple[str, str]] = []
 
 
 class PersonalStatsApp:
@@ -46,6 +47,9 @@ class PersonalStatsApp:
         self.my_metric = None
 
     def build(self) -> None:
+        global _LAST_MILESTONES
+        self.milestones = list(_LAST_MILESTONES)
+
         ui.label("Personal Stats Webapp").classes("text-2xl font-bold")
         ui.label("Read-only browser + interactive charting for immutable export DB")
         ui.label(f"Configured DB path: {DEFAULT_DB_PATH}").classes("text-sm text-gray-500")
@@ -145,6 +149,7 @@ class PersonalStatsApp:
 
                     self.milestones.append((normalized_date, label))
                     self.milestones = sorted(self.milestones, key=lambda x: x[0])
+                    self._persist_milestones()
                     self._render_milestone_list()
                     self._set_status(f"Added milestone: {normalized_date} - {label}")
                     milestone_dialog.close()
@@ -273,8 +278,14 @@ class PersonalStatsApp:
         self.milestone_list_container.set_visibility(True)
 
 
+    def _persist_milestones(self) -> None:
+        global _LAST_MILESTONES
+        _LAST_MILESTONES = list(self.milestones)
+
+
     def clear_milestones(self, current_filters_cb) -> None:
         self.milestones = []
+        self._persist_milestones()
         self._render_milestone_list()
         self._set_status("Cleared milestones.")
         self.refresh_charts(current_filters_cb())
