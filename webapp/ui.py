@@ -40,6 +40,7 @@ class PersonalStatsApp:
         self.anomaly_plot_container = None
         self.association_plot_container = None
         self.milestones: list[tuple[str, str]] = []
+        self.milestone_list_container = None
         self.milestone_list_label = None
         self.partner_metric = None
         self.my_metric = None
@@ -130,11 +131,12 @@ class PersonalStatsApp:
                 place.update()
                 self.refresh_all(_LAST_FILTERS)
 
-            with ui.row().classes("w-full gap-3 items-end flex-wrap"):
-                milestone_date = ui.date(mask="YYYY-MM-DD").props("label='Milestone date'").classes("w-full md:w-[14rem]")
-                milestone_label = ui.input("Milestone label", placeholder="e.g., Started supplement").classes("w-full md:w-[22rem]")
+            with ui.dialog() as milestone_dialog, ui.card().classes("w-[34rem] max-w-[95vw]"):
+                ui.label("Add Milestone").classes("text-lg font-semibold")
+                milestone_date = ui.date(mask="YYYY-MM-DD").props("label='Milestone date'").classes("w-full")
+                milestone_label = ui.input("Milestone label", placeholder="e.g., Started supplement").classes("w-full")
 
-                def add_milestone() -> None:
+                def submit_milestone() -> None:
                     normalized_date = self._normalize_ui_date(milestone_date.value)
                     label = str(milestone_label.value or "").strip()
                     if not normalized_date or not label:
@@ -145,18 +147,20 @@ class PersonalStatsApp:
                     self.milestones = sorted(self.milestones, key=lambda x: x[0])
                     self._render_milestone_list()
                     self._set_status(f"Added milestone: {normalized_date} - {label}")
+                    milestone_dialog.close()
                     self.refresh_charts(current_filters())
 
-                def clear_milestones() -> None:
-                    self.milestones = []
-                    self._render_milestone_list()
-                    self._set_status("Cleared milestones.")
-                    self.refresh_charts(current_filters())
+                with ui.row().classes("w-full justify-end gap-2"):
+                    ui.button("Cancel", on_click=milestone_dialog.close)
+                    ui.button("Submit", on_click=submit_milestone)
 
-                ui.button("Add Milestone", on_click=add_milestone)
-                ui.button("Clear Milestones", on_click=clear_milestones)
+            with ui.row().classes("w-full gap-2 flex-wrap"):
+                ui.button("Add Milestone", on_click=milestone_dialog.open)
+                ui.button("Clear Milestones", on_click=lambda: self.clear_milestones(current_filters))
 
-            self.milestone_list_label = ui.label("Milestones: none").classes("text-sm text-gray-600")
+            with ui.row().classes("w-full") as milestone_list_row:
+                self.milestone_list_container = milestone_list_row
+                self.milestone_list_label = ui.label("").classes("text-sm text-gray-600")
 
             with ui.row().classes("w-full gap-2 flex-wrap"):
                 ui.button("Run Search", on_click=save_and_refresh)
@@ -259,14 +263,21 @@ class PersonalStatsApp:
         return None
 
     def _render_milestone_list(self) -> None:
-        if self.milestone_list_label is None:
+        if self.milestone_list_label is None or self.milestone_list_container is None:
             return
         if not self.milestones:
-            self.milestone_list_label.set_text("Milestones: none")
+            self.milestone_list_container.set_visibility(False)
             return
         label = " | ".join(f"{date} - {text}" for date, text in self.milestones)
         self.milestone_list_label.set_text(f"Milestones: {label}")
+        self.milestone_list_container.set_visibility(True)
 
+
+    def clear_milestones(self, current_filters_cb) -> None:
+        self.milestones = []
+        self._render_milestone_list()
+        self._set_status("Cleared milestones.")
+        self.refresh_charts(current_filters_cb())
 
     def _metric_value_label(self, card) -> ui.label:
         return card.default_slot.children[1]
