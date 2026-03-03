@@ -50,20 +50,33 @@ def sex_streaks_chart(df: pd.DataFrame) -> go.Figure:
         fig.update_layout(title="Sex Streaks Over Time (no results)")
         return fig
 
+    chart_df = df.copy()
+    chart_df["start_date"] = pd.to_datetime(chart_df["start_date"])
+
     shown: set[str] = set()
-    for _, row in df.iterrows():
+    for _, row in chart_df.iterrows():
         name = "Sex streak" if row["type"] == "sex" else "No-sex streak"
         show_legend = name not in shown
         shown.add(name)
+
+        width_days = max(int(row["length"]), 1)
+        bar_center = row["start_date"] + pd.Timedelta(days=width_days / 2)
+        bar_center_iso = bar_center.to_pydatetime().isoformat()
+        end_date = row["start_date"] + pd.Timedelta(days=width_days)
+
         fig.add_trace(
             go.Bar(
-                x=[row["start_date"]],
+                x=[bar_center_iso],
                 y=[row["signed_length"]],
                 base=0,
-                width=[max(int(row["length"]), 1) * 86400000],
+                width=[width_days * 86400000],
                 name=name,
                 marker_color="royalblue" if row["type"] == "sex" else "firebrick",
-                hovertemplate="Start: %{x}<br>Length: " + str(row["length"]) + " day(s)<extra></extra>",
+                hovertemplate=(
+                    f"Start: {row['start_date'].date()}<br>"
+                    f"End: {(end_date - pd.Timedelta(days=1)).date()}<br>"
+                    f"Length: {width_days} day(s)<extra></extra>"
+                ),
                 showlegend=show_legend,
             )
         )
@@ -74,6 +87,7 @@ def sex_streaks_chart(df: pd.DataFrame) -> go.Figure:
         xaxis_title="Date",
         yaxis_title="Streak Length (days)",
         barmode="overlay",
+        bargap=0,
         autosize=True,
         height=500,
         margin={"l": 40, "r": 20, "t": 60, "b": 40},
