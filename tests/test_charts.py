@@ -53,7 +53,7 @@ class AdditionalChartsTest(unittest.TestCase):
                 {"date": pd.Timestamp("2024-01-02"), "total_org_partner": 2, "trend": 1.5},
             ]
         )
-        fig = partner_orgasms_chart(df, milestones=[(pd.Timestamp("2024-01-02"), "Event")])
+        fig = partner_orgasms_chart(df, milestones=[("2024-01-02", "Event")])
         self.assertGreaterEqual(len(fig.layout.shapes or []), 1)
 
     def test_duration_violin_chart_with_data(self):

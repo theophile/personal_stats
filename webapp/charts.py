@@ -3,13 +3,13 @@ import plotly.express as px
 import plotly.graph_objs as go
 
 
-def _add_milestones(fig: go.Figure, milestones: list[tuple[pd.Timestamp, str]] | None = None) -> None:
+def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = None) -> None:
     if not milestones:
         return
 
     for date, label in milestones:
         fig.add_vline(
-            x=date,
+            x=str(date),
             line_width=2,
             line_dash="dot",
             line_color="darkgreen",
@@ -20,7 +20,7 @@ def _add_milestones(fig: go.Figure, milestones: list[tuple[pd.Timestamp, str]] |
 
 def partner_orgasms_chart(
     df: pd.DataFrame,
-    milestones: list[tuple[pd.Timestamp, str]] | None = None,
+    milestones: list[tuple[str, str]] | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     if df.empty:
@@ -66,7 +66,7 @@ def rating_histogram_chart(df: pd.DataFrame) -> go.Figure:
 
 def sex_streaks_chart(
     df: pd.DataFrame,
-    milestones: list[tuple[pd.Timestamp, str]] | None = None,
+    milestones: list[tuple[str, str]] | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     if df.empty:
@@ -146,7 +146,7 @@ def duration_violin_chart(df: pd.DataFrame) -> go.Figure:
 
 def rolling_anomaly_chart(
     df: pd.DataFrame,
-    milestones: list[tuple[pd.Timestamp, str]] | None = None,
+    milestones: list[tuple[str, str]] | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     if df.empty:

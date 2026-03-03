@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-import pandas as pd
 
 from nicegui import ui
 from plotly.graph_objs import Figure
@@ -40,7 +39,8 @@ class PersonalStatsApp:
         self.duration_plot_container = None
         self.anomaly_plot_container = None
         self.association_plot_container = None
-        self.milestones: list[tuple[pd.Timestamp, str]] = []
+        self.milestones: list[tuple[str, str]] = []
+        self.milestone_list_label = None
         self.partner_metric = None
         self.my_metric = None
 
@@ -135,26 +135,28 @@ class PersonalStatsApp:
                 milestone_label = ui.input("Milestone label", placeholder="e.g., Started supplement").classes("w-full md:w-[22rem]")
 
                 def add_milestone() -> None:
-                    if not milestone_date.value or not milestone_label.value:
+                    normalized_date = self._normalize_ui_date(milestone_date.value)
+                    label = str(milestone_label.value or "").strip()
+                    if not normalized_date or not label:
                         self._set_status("Milestone date and label are required.")
                         return
-                    try:
-                        date = pd.to_datetime(milestone_date.value)
-                    except Exception:
-                        self._set_status("Invalid milestone date.")
-                        return
-                    self.milestones.append((date, str(milestone_label.value).strip()))
+
+                    self.milestones.append((normalized_date, label))
                     self.milestones = sorted(self.milestones, key=lambda x: x[0])
-                    self._set_status(f"Added milestone: {milestone_date.value} - {milestone_label.value}")
+                    self._render_milestone_list()
+                    self._set_status(f"Added milestone: {normalized_date} - {label}")
                     self.refresh_charts(current_filters())
 
                 def clear_milestones() -> None:
                     self.milestones = []
+                    self._render_milestone_list()
                     self._set_status("Cleared milestones.")
                     self.refresh_charts(current_filters())
 
                 ui.button("Add Milestone", on_click=add_milestone)
                 ui.button("Clear Milestones", on_click=clear_milestones)
+
+            self.milestone_list_label = ui.label("Milestones: none").classes("text-sm text-gray-600")
 
             with ui.row().classes("w-full gap-2 flex-wrap"):
                 ui.button("Run Search", on_click=save_and_refresh)
@@ -234,7 +236,37 @@ class PersonalStatsApp:
         partner.update()
         position_ids.update()
         place.update()
+        self._render_milestone_list()
         self.refresh_all(initial_filters)
+
+    def _normalize_ui_date(self, value) -> str | None:
+        if not value:
+            return None
+        if isinstance(value, str):
+            try:
+                return datetime.strptime(value[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
+            except ValueError:
+                return None
+        if isinstance(value, dict):
+            year = value.get("year")
+            month = value.get("month")
+            day = value.get("day")
+            if year and month and day:
+                try:
+                    return datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d")
+                except ValueError:
+                    return None
+        return None
+
+    def _render_milestone_list(self) -> None:
+        if self.milestone_list_label is None:
+            return
+        if not self.milestones:
+            self.milestone_list_label.set_text("Milestones: none")
+            return
+        label = " | ".join(f"{date} - {text}" for date, text in self.milestones)
+        self.milestone_list_label.set_text(f"Milestones: {label}")
+
 
     def _metric_value_label(self, card) -> ui.label:
         return card.default_slot.children[1]
