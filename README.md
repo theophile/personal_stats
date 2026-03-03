@@ -39,6 +39,65 @@ Optional environment variables:
   - partner-orgasms chart as PNG,
   - structured summary report as JSON (including chart summary metrics).
 
+
+## Import one or more source databases into a master DB
+
+The new import script builds a **normalized master SQLite DB** designed for growth (multiple users, multiple source DBs, per-report partners, per-report positions, and event grouping).
+
+### Why keep SQLite?
+
+SQLite is still a good fit here:
+- local-first and private,
+- simple distribution/backups,
+- zero server to run,
+- enough relational power for the normalized schema.
+
+The key improvement is **schema design**, not engine replacement: the master DB now stores event-level and report-level entities separately, which scales to multi-person / partial-overlap encounters.
+
+### CLI usage
+
+```bash
+python merge_databases.py \
+  --source mine=/path/to/my.db \
+  --source wife=/path/to/wife.db \
+  --out merged_master.db
+```
+
+You will be prompted for:
+- who the source owner/user is for each DB (who "me" is),
+- partner-identity mapping (e.g., that partner "Alex" in one DB is the same person as source owner "Alex" from another DB),
+- position mapping into canonical position names (to handle user-defined position IDs/names across DBs).
+
+For automation you can pass owner names and disable prompts:
+
+```bash
+python merge_databases.py \
+  --source mine=/path/to/my.db \
+  --source wife=/path/to/wife.db \
+  --owner mine="Alex" \
+  --owner wife="Sam" \
+  --out merged_master.db \
+  --non-interactive
+```
+
+### Master schema highlights
+
+- `people`: canonical identities across all sources.
+- `source_databases`: each imported DB + owner person.
+- `source_partners`: per-source partner ID/name mapped to canonical `people`.
+- `canonical_positions` + `source_position_map`: resolves custom position IDs/names across DBs.
+- `events`: grouped likely-shared encounters.
+- `event_reports`: one report per source entry (keeps each person's perspective).
+- `report_partners`: who each report says was involved (foundation for future orgasm-attribution logic).
+- `report_positions` and `report_places`: normalized per-report tags.
+
+### Matching behavior
+
+- Event grouping currently requires same `date`.
+- If both durations exist, they must be within `--duration-tolerance`.
+- A source cannot contribute multiple reports to the same grouped event.
+- This supports either **single-source imports** (app works with one DB) or multi-source merges.
+
 ## Troubleshooting
 
 If you see an error such as `no such table: entries`, verify that `PERSONAL_STATS_DB_PATH`
