@@ -35,6 +35,15 @@ class SexStreaksChartTest(unittest.TestCase):
         self.assertEqual(intervals[2][0], pd.Timestamp("2024-01-06"))
         self.assertEqual(intervals[2][1], pd.Timestamp("2024-01-07"))
 
+    def test_chart_x_values_are_json_safe(self):
+        df = pd.DataFrame(
+            [{"start_date": "2024-01-01", "length": 2, "signed_length": 2, "type": "sex"}]
+        )
+
+        fig = sex_streaks_chart(df)
+
+        self.assertIsInstance(fig.data[0].x[0], str)
+
 
 if __name__ == "__main__":
     unittest.main()

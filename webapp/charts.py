@@ -61,11 +61,12 @@ def sex_streaks_chart(df: pd.DataFrame) -> go.Figure:
 
         width_days = max(int(row["length"]), 1)
         bar_center = row["start_date"] + pd.Timedelta(days=width_days / 2)
+        bar_center_iso = bar_center.to_pydatetime().isoformat()
         end_date = row["start_date"] + pd.Timedelta(days=width_days)
 
         fig.add_trace(
             go.Bar(
-                x=[bar_center],
+                x=[bar_center_iso],
                 y=[row["signed_length"]],
                 base=0,
                 width=[width_days * 86400000],
