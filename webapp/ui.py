@@ -66,35 +66,39 @@ class PersonalStatsApp:
 
         with ui.card().classes("w-full"):
             ui.label("Filters").classes("text-lg")
-            with ui.row().classes("items-end w-full gap-3"):
-                start_date = ui.date(value="2024-01-01", mask="YYYY-MM-DD").props("label='Start date'")
-                end_date = ui.date(value="2024-12-31", mask="YYYY-MM-DD").props("label='End date'")
-                note_keyword = ui.input("Note keyword contains", placeholder="optional")
-                partner = ui.select(partner_choices, label="Partner", value="")
-                position_ids = ui.select(
-                    position_choices,
-                    label="Positions",
-                    value=[],
-                    multiple=True,
-                ).props("use-chips clearable")
-                place = ui.select(place_choices, label="Place", value="")
+            with ui.row().classes("w-full gap-4 items-start"):
+                with ui.column().classes("w-full sm:w-72 gap-2"):
+                    start_date = ui.date(value="2024-01-01", mask="YYYY-MM-DD").props("label='Start date'").classes("w-full")
+                    end_date = ui.date(value="2024-12-31", mask="YYYY-MM-DD").props("label='End date'").classes("w-full")
 
-                def _to_db_date(value: str | None) -> str | None:
-                    if not value:
-                        return None
-                    return datetime.strptime(value, "%Y-%m-%d").strftime("%Y.%m.%d")
+                with ui.column().classes("w-full flex-1 gap-2"):
+                    note_keyword = ui.input("Note keyword contains", placeholder="optional").classes("w-full")
+                    partner = ui.select(partner_choices, label="Partner", value="").classes("w-full")
+                    position_ids = ui.select(
+                        position_choices,
+                        label="Positions",
+                        value=[],
+                        multiple=True,
+                    ).props("use-chips clearable").classes("w-full")
+                    place = ui.select(place_choices, label="Place", value="").classes("w-full")
 
-                def current_filters() -> SearchFilters:
-                    selected_positions = [int(v) for v in (position_ids.value or [])]
-                    return SearchFilters(
-                        start_date=_to_db_date(start_date.value),
-                        end_date=_to_db_date(end_date.value),
-                        note_keyword=note_keyword.value or None,
-                        partner_id=int(partner.value) if partner.value else None,
-                        position_ids=selected_positions or None,
-                        place_id=int(place.value) if place.value else None,
-                    )
+            def _to_db_date(value: str | None) -> str | None:
+                if not value:
+                    return None
+                return datetime.strptime(value, "%Y-%m-%d").strftime("%Y.%m.%d")
 
+            def current_filters() -> SearchFilters:
+                selected_positions = [int(v) for v in (position_ids.value or [])]
+                return SearchFilters(
+                    start_date=_to_db_date(start_date.value),
+                    end_date=_to_db_date(end_date.value),
+                    note_keyword=note_keyword.value or None,
+                    partner_id=int(partner.value) if partner.value else None,
+                    position_ids=selected_positions or None,
+                    place_id=int(place.value) if place.value else None,
+                )
+
+            with ui.row().classes("w-full gap-2"):
                 ui.button("Run Search", on_click=lambda: self.refresh_all(current_filters()))
                 ui.button("Export Table CSV", on_click=lambda: self.export_csv(current_filters()))
                 ui.button("Export Chart PNG", on_click=lambda: self.export_chart_png(current_filters()))
