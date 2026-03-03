@@ -187,8 +187,20 @@ class PersonalStatsApp:
             self.table.update()
             self._set_status(str(exc))
 
+    def _event_row(self, e) -> dict:
+        args = getattr(e, "args", None)
+        if isinstance(args, dict):
+            row = args.get("row", {})
+            return row if isinstance(row, dict) else {}
+        if isinstance(args, (list, tuple)):
+            for item in args:
+                if isinstance(item, dict) and "entry_id" in item:
+                    return item
+            return next((item for item in args if isinstance(item, dict)), {})
+        return {}
+
     def show_entry_dialog(self, e) -> None:
-        row = e.args.get("row", {}) if hasattr(e, "args") else {}
+        row = self._event_row(e)
         with ui.dialog() as dialog, ui.card().classes("w-[42rem] max-w-[95vw]"):
             ui.label(f"Entry #{row.get('entry_id', '')}").classes("text-xl font-semibold")
             with ui.grid(columns=2).classes("w-full gap-x-6 gap-y-2"):
