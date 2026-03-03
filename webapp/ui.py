@@ -6,11 +6,14 @@ from nicegui import ui
 from plotly.graph_objs import Figure
 from webapp.charts import (
     location_room_sankey_chart,
+    duration_violin_chart,
     partner_orgasms_chart,
+    position_association_chart,
     position_combinations_chart,
     position_upset_chart,
     position_frequency_chart,
     rating_histogram_chart,
+    rolling_anomaly_chart,
     sex_streaks_chart,
 )
 from webapp.config import DEFAULT_DB_PATH
@@ -18,6 +21,7 @@ from webapp.services import DataSourceError, SearchFilters, StatsService
 
 
 _LAST_FILTERS: SearchFilters | None = None
+_LAST_MILESTONES: list[tuple[str, str]] = []
 
 
 class PersonalStatsApp:
@@ -33,10 +37,19 @@ class PersonalStatsApp:
         self.position_upset_plot_container = None
         self.status_label = None
         self.entries_metric = None
+        self.duration_plot_container = None
+        self.anomaly_plot_container = None
+        self.association_plot_container = None
+        self.milestones: list[tuple[str, str]] = []
+        self.milestone_list_container = None
+        self.milestone_list_label = None
         self.partner_metric = None
         self.my_metric = None
 
     def build(self) -> None:
+        global _LAST_MILESTONES
+        self.milestones = list(_LAST_MILESTONES)
+
         ui.label("Personal Stats Webapp").classes("text-2xl font-bold")
         ui.label("Read-only browser + interactive charting for immutable export DB")
         ui.label(f"Configured DB path: {DEFAULT_DB_PATH}").classes("text-sm text-gray-500")
@@ -122,6 +135,38 @@ class PersonalStatsApp:
                 place.update()
                 self.refresh_all(_LAST_FILTERS)
 
+            with ui.dialog() as milestone_dialog, ui.card().classes("w-[34rem] max-w-[95vw]"):
+                ui.label("Add Milestone").classes("text-lg font-semibold")
+                milestone_date = ui.date(mask="YYYY-MM-DD").props("label='Milestone date'").classes("w-full")
+                milestone_label = ui.input("Milestone label", placeholder="e.g., Started supplement").classes("w-full")
+
+                def submit_milestone() -> None:
+                    normalized_date = self._normalize_ui_date(milestone_date.value)
+                    label = str(milestone_label.value or "").strip()
+                    if not normalized_date or not label:
+                        self._set_status("Milestone date and label are required.")
+                        return
+
+                    self.milestones.append((normalized_date, label))
+                    self.milestones = sorted(self.milestones, key=lambda x: x[0])
+                    self._persist_milestones()
+                    self._render_milestone_list()
+                    self._set_status(f"Added milestone: {normalized_date} - {label}")
+                    milestone_dialog.close()
+                    self.refresh_charts(current_filters())
+
+                with ui.row().classes("w-full justify-end gap-2"):
+                    ui.button("Cancel", on_click=milestone_dialog.close)
+                    ui.button("Submit", on_click=submit_milestone)
+
+            with ui.row().classes("w-full gap-2 flex-wrap"):
+                ui.button("Add Milestone", on_click=milestone_dialog.open)
+                ui.button("Clear Milestones", on_click=lambda: self.clear_milestones(current_filters))
+
+            with ui.row().classes("w-full") as milestone_list_row:
+                self.milestone_list_container = milestone_list_row
+                self.milestone_list_label = ui.label("").classes("text-sm text-gray-600")
+
             with ui.row().classes("w-full gap-2 flex-wrap"):
                 ui.button("Run Search", on_click=save_and_refresh)
                 ui.button("Reset Filters", on_click=reset_filters)
@@ -155,6 +200,13 @@ class PersonalStatsApp:
         with ui.card().classes("w-full"):
             ui.label("Chart: Rating Distribution")
             self.rating_plot_container = ui.column().classes("w-full")
+        with ui.card().classes("w-full"):
+            ui.label("Chart: Duration Distribution by Partner")
+            self.duration_plot_container = ui.column().classes("w-full")
+
+        with ui.card().classes("w-full"):
+            ui.label("Chart: Partner Orgasm Anomaly Detection")
+            self.anomaly_plot_container = ui.column().classes("w-full")
 
         with ui.card().classes("w-full"):
             ui.label("Chart: Sex Streaks")
@@ -167,6 +219,10 @@ class PersonalStatsApp:
         with ui.card().classes("w-full"):
             ui.label("Chart: Position Combinations")
             self.position_combo_plot_container = ui.column().classes("w-full")
+
+        with ui.card().classes("w-full"):
+            ui.label("Chart: Position Association Rules")
+            self.association_plot_container = ui.column().classes("w-full")
 
         with ui.card().classes("w-full"):
             ui.label("Chart: Position UpSet")
@@ -189,7 +245,50 @@ class PersonalStatsApp:
         partner.update()
         position_ids.update()
         place.update()
+        self._render_milestone_list()
         self.refresh_all(initial_filters)
+
+    def _normalize_ui_date(self, value) -> str | None:
+        if not value:
+            return None
+        if isinstance(value, str):
+            try:
+                return datetime.strptime(value[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
+            except ValueError:
+                return None
+        if isinstance(value, dict):
+            year = value.get("year")
+            month = value.get("month")
+            day = value.get("day")
+            if year and month and day:
+                try:
+                    return datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d")
+                except ValueError:
+                    return None
+        return None
+
+    def _render_milestone_list(self) -> None:
+        if self.milestone_list_label is None or self.milestone_list_container is None:
+            return
+        if not self.milestones:
+            self.milestone_list_container.set_visibility(False)
+            return
+        label = " | ".join(f"{date} - {text}" for date, text in self.milestones)
+        self.milestone_list_label.set_text(f"Milestones: {label}")
+        self.milestone_list_container.set_visibility(True)
+
+
+    def _persist_milestones(self) -> None:
+        global _LAST_MILESTONES
+        _LAST_MILESTONES = list(self.milestones)
+
+
+    def clear_milestones(self, current_filters_cb) -> None:
+        self.milestones = []
+        self._persist_milestones()
+        self._render_milestone_list()
+        self._set_status("Cleared milestones.")
+        self.refresh_charts(current_filters_cb())
 
     def _metric_value_label(self, card) -> ui.label:
         return card.default_slot.children[1]
@@ -272,9 +371,12 @@ class PersonalStatsApp:
         for refresh_chart in (
             self.refresh_partner_org_chart,
             self.refresh_rating_chart,
+            self.refresh_duration_chart,
+            self.refresh_anomaly_chart,
             self.refresh_streak_chart,
             self.refresh_position_chart,
             self.refresh_position_combinations_chart,
+            self.refresh_association_chart,
             self.refresh_position_upset_chart,
             self.refresh_location_room_chart,
         ):
@@ -286,7 +388,7 @@ class PersonalStatsApp:
     def refresh_partner_org_chart(self, filters: SearchFilters) -> None:
         try:
             df = self.service.partner_orgasms_timeseries(filters)
-            fig = partner_orgasms_chart(df)
+            fig = partner_orgasms_chart(df, milestones=self.milestones)
         except DataSourceError as exc:
             fig = Figure()
             fig.update_layout(title="Partner Orgasms Over Time (data source error)")
@@ -305,10 +407,33 @@ class PersonalStatsApp:
 
         self._render_plotly(self.rating_plot_container, fig)
 
+    def refresh_duration_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.duration_by_partner_dataframe(filters)
+            fig = duration_violin_chart(df)
+        except DataSourceError as exc:
+            fig = Figure()
+            fig.update_layout(title="Duration Distribution by Partner (data source error)")
+            self._set_status(str(exc))
+
+        self._render_plotly(self.duration_plot_container, fig)
+
+    def refresh_anomaly_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.partner_orgasms_anomaly_dataframe(filters)
+            fig = rolling_anomaly_chart(df, milestones=self.milestones)
+        except DataSourceError as exc:
+            fig = Figure()
+            fig.update_layout(title="Partner Orgasm Anomaly Detection (data source error)")
+            self._set_status(str(exc))
+
+        self._render_plotly(self.anomaly_plot_container, fig)
+
+
     def refresh_streak_chart(self, filters: SearchFilters) -> None:
         try:
             df = self.service.sex_streaks_dataframe(filters)
-            fig = sex_streaks_chart(df)
+            fig = sex_streaks_chart(df, milestones=self.milestones)
         except Exception as exc:
             fig = Figure()
             fig.update_layout(title="Sex Streaks Over Time (chart error)")
@@ -337,6 +462,17 @@ class PersonalStatsApp:
             self._set_status(str(exc))
 
         self._render_plotly(self.position_combo_plot_container, fig)
+
+    def refresh_association_chart(self, filters: SearchFilters) -> None:
+        try:
+            df = self.service.position_association_rules_dataframe(filters)
+            fig = position_association_chart(df)
+        except Exception as exc:
+            fig = Figure()
+            fig.update_layout(title="Position Association Rules (chart error)")
+            self._set_status(str(exc))
+
+        self._render_plotly(self.association_plot_container, fig)
 
     def refresh_position_upset_chart(self, filters: SearchFilters) -> None:
         try:
@@ -379,7 +515,7 @@ class PersonalStatsApp:
     def export_chart_png(self, filters: SearchFilters) -> None:
         try:
             df = self.service.partner_orgasms_timeseries(filters)
-            fig = partner_orgasms_chart(df)
+            fig = partner_orgasms_chart(df, milestones=self.milestones)
             png_path = self.service.temp_export_path("partner_orgasms_chart_", ".png")
             fig.write_image(str(png_path), format="png", engine="kaleido")
             ui.download(str(png_path), filename="partner_orgasms_chart.png")

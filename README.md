@@ -29,14 +29,17 @@ Optional environment variables:
 - Interactive Plotly charts:
   - partner orgasms over time with 30-day trend,
   - rating distribution histogram,
+  - duration distribution violin/box by partner,
+  - partner-orgasm rolling-baseline anomaly detection,
   - sex streaks timeline (sex vs no-sex streak segments),
   - position frequency bar chart,
   - position-combination frequency chart (top combinations),
   - position UpSet-style combination view,
-  - location/room Sankey diagram.
+  - location/room Sankey diagram,
+  - position association rules chart (support/confidence/lift).
 - Export actions:
   - filtered table as CSV,
-  - partner-orgasms chart as PNG,
+  - partner-orgasms chart as PNG (including milestone lines),
   - structured summary report as JSON (including chart summary metrics).
 
 ## Troubleshooting

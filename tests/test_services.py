@@ -45,13 +45,21 @@ def _build_test_db(path: Path) -> None:
     cur.execute(
         "INSERT INTO entries VALUES (2,1,'2024.01.02',20,'second note',5,1,1,1,1)"
     )
+    cur.execute(
+        "INSERT INTO entries VALUES (3,1,'2024.01.03',60,'third note',5,1,1,2,3)"
+    )
 
     cur.execute("INSERT INTO entry_partner VALUES (1,1)")
     cur.execute("INSERT INTO entry_partner VALUES (2,2)")
+    cur.execute("INSERT INTO entry_partner VALUES (3,1)")
     cur.execute("INSERT INTO entry_position VALUES (1,10)")
+    cur.execute("INSERT INTO entry_position VALUES (1,11)")
     cur.execute("INSERT INTO entry_position VALUES (2,11)")
+    cur.execute("INSERT INTO entry_position VALUES (3,10)")
+    cur.execute("INSERT INTO entry_position VALUES (3,11)")
     cur.execute("INSERT INTO entry_place VALUES (1,0)")
     cur.execute("INSERT INTO entry_place VALUES (2,1)")
+    cur.execute("INSERT INTO entry_place VALUES (3,10)")
 
     conn.commit()
     conn.close()
@@ -88,14 +96,14 @@ class StatsServiceTest(unittest.TestCase):
 
     def test_summary_metrics(self):
         metrics = self.service.summary_metrics(SearchFilters())
-        self.assertEqual(metrics["entries"], 2)
-        self.assertEqual(metrics["total_partner_orgasms"], 3)
-        self.assertEqual(metrics["total_my_orgasms"], 2)
+        self.assertEqual(metrics["entries"], 3)
+        self.assertEqual(metrics["total_partner_orgasms"], 6)
+        self.assertEqual(metrics["total_my_orgasms"], 4)
 
     def test_partner_orgasms_timeseries(self):
         try:
             df = self.service.partner_orgasms_timeseries(SearchFilters())
-            self.assertEqual(len(df), 2)
+            self.assertEqual(len(df), 3)
             self.assertIn("trend", df.columns)
         except DataSourceError as exc:
             self.assertIn("pandas is required", str(exc))
@@ -114,16 +122,16 @@ class StatsServiceTest(unittest.TestCase):
 
         position_df = self.service.position_frequency_dataframe(SearchFilters())
         self.assertIn("position", position_df.columns)
-        self.assertEqual(int(position_df["count"].sum()), 2)
+        self.assertEqual(int(position_df["count"].sum()), 5)
 
         combo_df = self.service.position_combinations_dataframe(SearchFilters())
         self.assertIn("combination", combo_df.columns)
-        self.assertEqual(int(combo_df["count"].sum()), 2)
+        self.assertEqual(int(combo_df["count"].sum()), 3)
 
         upset_df = self.service.position_upset_dataframe(SearchFilters())
         self.assertIn("Position A", upset_df.columns)
         self.assertIn("Position B", upset_df.columns)
-        self.assertEqual(len(upset_df), 2)
+        self.assertEqual(len(upset_df), 3)
         self.assertTrue(set(upset_df.to_numpy().flatten()).issubset({0, 1}))
 
         sankey_df = self.service.location_room_sankey_dataframe(SearchFilters())
@@ -136,9 +144,9 @@ class StatsServiceTest(unittest.TestCase):
 
     def test_build_report_and_export_json(self):
         report = self.service.build_report(SearchFilters())
-        self.assertEqual(report["metrics"]["entries"], 2)
+        self.assertEqual(report["metrics"]["entries"], 3)
         self.assertEqual(report["date_range"]["min"], "2024.01.01")
-        self.assertEqual(report["date_range"]["max"], "2024.01.02")
+        self.assertEqual(report["date_range"]["max"], "2024.01.03")
         self.assertIn("chart_summaries", report)
         self.assertIn("distinct_positions", report["chart_summaries"])
         self.assertIn("upset_combinations", report["chart_summaries"])
@@ -146,6 +154,27 @@ class StatsServiceTest(unittest.TestCase):
         json_path = self.service.export_report_json(SearchFilters())
         self.assertTrue(json_path.exists())
         self.assertGreater(os.path.getsize(json_path), 0)
+
+    def test_duration_anomaly_and_association_dataframes(self):
+        duration_df = self.service.duration_by_partner_dataframe(SearchFilters())
+        self.assertIn("partner", duration_df.columns)
+        self.assertIn("duration", duration_df.columns)
+        self.assertGreaterEqual(len(duration_df), 3)
+
+        anomaly_df = self.service.partner_orgasms_anomaly_dataframe(SearchFilters(), window_days=2, z_threshold=1.0)
+        self.assertIn("zscore", anomaly_df.columns)
+        self.assertIn("is_anomaly", anomaly_df.columns)
+        self.assertEqual(len(anomaly_df), 3)
+
+        rules_df = self.service.position_association_rules_dataframe(
+            SearchFilters(),
+            min_support=0.2,
+            min_confidence=0.4,
+        )
+        self.assertIn("antecedent", rules_df.columns)
+        self.assertIn("consequent", rules_df.columns)
+        self.assertIn("lift", rules_df.columns)
+        self.assertGreaterEqual(len(rules_df), 1)
 
 
 if __name__ == "__main__":

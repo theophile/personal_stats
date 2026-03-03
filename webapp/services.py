@@ -416,6 +416,144 @@ class StatsService:
             ]
         )
 
+
+    def duration_by_partner_dataframe(self, filters: SearchFilters):
+        self.ensure_expected_schema()
+        rows = self.search_entries(filters, limit=100000)
+        records: list[dict[str, object]] = []
+        for row in rows:
+            duration = row.get("duration")
+            if duration is None:
+                continue
+            try:
+                duration_value = int(duration)
+            except (TypeError, ValueError):
+                continue
+
+            raw_partners = str(row.get("partners") or "").strip()
+            partners = [p.strip() for p in raw_partners.split(",") if p.strip()] or ["Unknown"]
+            for partner in partners:
+                records.append({"partner": partner, "duration": duration_value})
+
+        return pd.DataFrame(records, columns=["partner", "duration"])
+
+    def partner_orgasms_anomaly_dataframe(
+        self,
+        filters: SearchFilters,
+        window_days: int = 30,
+        z_threshold: float = 2.0,
+    ):
+        daily = self.partner_orgasms_timeseries(filters)
+        if daily.empty:
+            return pd.DataFrame(columns=["date", "value", "baseline", "rolling_std", "zscore", "is_anomaly"])
+
+        if window_days < 2:
+            window_days = 2
+
+        out = daily.rename(columns={"total_org_partner": "value"}).copy()
+        out["baseline"] = out["value"].rolling(window=window_days, min_periods=2).mean()
+        out["rolling_std"] = out["value"].rolling(window=window_days, min_periods=2).std(ddof=0)
+        out["zscore"] = 0.0
+
+        valid_std = out["rolling_std"].fillna(0) > 0
+        out.loc[valid_std, "zscore"] = (
+            (out.loc[valid_std, "value"] - out.loc[valid_std, "baseline"])
+            / out.loc[valid_std, "rolling_std"]
+        )
+        out["is_anomaly"] = (out["zscore"].abs() >= float(z_threshold)).astype(int)
+        return out[["date", "value", "baseline", "rolling_std", "zscore", "is_anomaly"]]
+
+    def position_association_rules_dataframe(
+        self,
+        filters: SearchFilters,
+        min_support: float = 0.05,
+        min_confidence: float = 0.3,
+    ):
+        self.ensure_expected_schema()
+        entry_ids = self._entry_ids_for_filters(filters)
+        if not entry_ids:
+            return pd.DataFrame(columns=["antecedent", "consequent", "support", "confidence", "lift", "count"])
+
+        try:
+            with self.db.cursor() as cur:
+                position_map = self._fetch_id_name_map("positions")
+                transactions: list[set[int]] = []
+                for entry_id in entry_ids:
+                    ids = {
+                        int(r[0])
+                        for r in cur.execute(
+                            "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
+                        ).fetchall()
+                    }
+                    if ids:
+                        transactions.append(ids)
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query association data: {exc}") from exc
+
+        transaction_count = len(transactions)
+        if transaction_count == 0:
+            return pd.DataFrame(columns=["antecedent", "consequent", "support", "confidence", "lift", "count"])
+
+        if min_support <= 0:
+            min_support = 0.01
+        if min_confidence <= 0:
+            min_confidence = 0.01
+
+        single_counts: Counter[int] = Counter()
+        pair_counts: Counter[tuple[int, int]] = Counter()
+        for t in transactions:
+            single_counts.update(t)
+            ordered = sorted(t)
+            for i, left in enumerate(ordered):
+                for right in ordered[i + 1 :]:
+                    pair_counts[(left, right)] += 1
+
+        rules: list[dict[str, object]] = []
+        for (left, right), both_count in pair_counts.items():
+            support = both_count / transaction_count
+            if support < min_support:
+                continue
+
+            left_count = single_counts[left]
+            right_count = single_counts[right]
+            if left_count <= 0 or right_count <= 0:
+                continue
+
+            confidence_lr = both_count / left_count
+            confidence_rl = both_count / right_count
+            support_right = right_count / transaction_count
+            support_left = left_count / transaction_count
+
+            if confidence_lr >= min_confidence and support_right > 0:
+                rules.append(
+                    {
+                        "antecedent": position_map.get(left, f"Unknown({left})"),
+                        "consequent": position_map.get(right, f"Unknown({right})"),
+                        "support": support,
+                        "confidence": confidence_lr,
+                        "lift": confidence_lr / support_right,
+                        "count": both_count,
+                    }
+                )
+
+            if confidence_rl >= min_confidence and support_left > 0:
+                rules.append(
+                    {
+                        "antecedent": position_map.get(right, f"Unknown({right})"),
+                        "consequent": position_map.get(left, f"Unknown({left})"),
+                        "support": support,
+                        "confidence": confidence_rl,
+                        "lift": confidence_rl / support_left,
+                        "count": both_count,
+                    }
+                )
+
+        if not rules:
+            return pd.DataFrame(columns=["antecedent", "consequent", "support", "confidence", "lift", "count"])
+
+        df = pd.DataFrame(rules)
+        return df.sort_values(["lift", "confidence", "support"], ascending=False).reset_index(drop=True)
+
     def summary_metrics(self, filters: SearchFilters) -> dict[str, int]:
         rows = self.search_entries(filters, limit=100000)
         return {

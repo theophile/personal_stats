@@ -3,10 +3,48 @@ import plotly.express as px
 import plotly.graph_objs as go
 
 
-def partner_orgasms_chart(df: pd.DataFrame) -> go.Figure:
+def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = None) -> None:
+    if not milestones:
+        return
+
+    for date, label in milestones:
+        try:
+            x_value = pd.to_datetime(date).to_pydatetime()
+        except (TypeError, ValueError):
+            continue
+
+        fig.add_shape(
+            type="line",
+            x0=x_value,
+            x1=x_value,
+            xref="x",
+            y0=0,
+            y1=1,
+            yref="paper",
+            line={"width": 2, "dash": "dot", "color": "darkgreen"},
+        )
+        fig.add_annotation(
+            x=x_value,
+            y=1,
+            xref="x",
+            yref="paper",
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            yanchor="bottom",
+            font={"size": 11, "color": "darkgreen"},
+            bgcolor="rgba(255,255,255,0.75)",
+        )
+
+
+def partner_orgasms_chart(
+    df: pd.DataFrame,
+    milestones: list[tuple[str, str]] | None = None,
+) -> go.Figure:
     fig = go.Figure()
     if df.empty:
         fig.update_layout(title="Partner Orgasms Over Time (no results)")
+        _add_milestones(fig, milestones)
         return fig
 
     fig.add_trace(
@@ -24,6 +62,7 @@ def partner_orgasms_chart(df: pd.DataFrame) -> go.Figure:
         margin={"l": 40, "r": 20, "t": 60, "b": 40},
     )
     fig.update_xaxes(rangeslider={"visible": True})
+    _add_milestones(fig, milestones)
     return fig
 
 
@@ -44,7 +83,10 @@ def rating_histogram_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def sex_streaks_chart(df: pd.DataFrame) -> go.Figure:
+def sex_streaks_chart(
+    df: pd.DataFrame,
+    milestones: list[tuple[str, str]] | None = None,
+) -> go.Figure:
     fig = go.Figure()
     if df.empty:
         fig.update_layout(title="Sex Streaks Over Time (no results)")
@@ -98,6 +140,87 @@ def sex_streaks_chart(df: pd.DataFrame) -> go.Figure:
         tickvals=list(range(-max_abs, max_abs + 1)),
         ticktext=[str(abs(v)) for v in range(-max_abs, max_abs + 1)],
     )
+    _add_milestones(fig, milestones)
+    return fig
+
+
+def duration_violin_chart(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if df.empty:
+        fig.update_layout(title="Duration Distribution by Partner (no results)")
+        return fig
+
+    fig = px.violin(
+        df,
+        x="partner",
+        y="duration",
+        box=True,
+        points="all",
+        title="Duration Distribution by Partner",
+        labels={"partner": "Partner", "duration": "Duration (minutes)"},
+    )
+    fig.update_layout(autosize=True, height=500, margin={"l": 40, "r": 20, "t": 60, "b": 80})
+    return fig
+
+
+def rolling_anomaly_chart(
+    df: pd.DataFrame,
+    milestones: list[tuple[str, str]] | None = None,
+) -> go.Figure:
+    fig = go.Figure()
+    if df.empty:
+        fig.update_layout(title="Partner Orgasm Anomaly Detection (no results)")
+        _add_milestones(fig, milestones)
+        return fig
+
+    fig.add_trace(go.Scatter(x=df["date"], y=df["value"], mode="lines+markers", name="Daily orgasms"))
+    fig.add_trace(go.Scatter(x=df["date"], y=df["baseline"], mode="lines", line={"dash": "dash"}, name="Rolling baseline"))
+
+    anomalies = df[df["is_anomaly"] == 1]
+    if not anomalies.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=anomalies["date"],
+                y=anomalies["value"],
+                mode="markers",
+                marker={"color": "crimson", "size": 10, "symbol": "x"},
+                name="Anomaly",
+                hovertemplate="Date: %{x}<br>Value: %{y}<br>Z-score: %{customdata:.2f}<extra></extra>",
+                customdata=anomalies["zscore"],
+            )
+        )
+
+    fig.update_layout(
+        title="Partner Orgasm Anomaly Detection",
+        xaxis_title="Date",
+        yaxis_title="Daily partner orgasms",
+        autosize=True,
+        height=500,
+        margin={"l": 40, "r": 20, "t": 60, "b": 40},
+    )
+    fig.update_xaxes(rangeslider={"visible": True})
+    _add_milestones(fig, milestones)
+    return fig
+
+
+def position_association_chart(df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if df.empty:
+        fig.update_layout(title="Position Association Rules (no results)")
+        return fig
+
+    chart_df = df.head(20).copy()
+    chart_df["rule"] = chart_df["antecedent"] + " → " + chart_df["consequent"]
+    fig = px.bar(
+        chart_df,
+        x="rule",
+        y="lift",
+        color="confidence",
+        title="Position Association Rules (Top 20 by lift)",
+        labels={"rule": "Rule", "lift": "Lift", "confidence": "Confidence"},
+        hover_data=["support", "count"],
+    )
+    fig.update_layout(autosize=True, height=500, margin={"l": 40, "r": 20, "t": 60, "b": 100})
     return fig
 
 
