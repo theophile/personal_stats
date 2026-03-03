@@ -26,6 +26,7 @@ Optional environment variables:
   - partner,
   - position,
   - place.
+  - filter state persistence across page reload/reconnects.
 - Summary metric cards for filtered datasets (entries, my orgasms, partner orgasms).
 - Interactive Plotly charts:
   - partner orgasms over time with 30-day trend,
