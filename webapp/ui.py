@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from nicegui import ui
 from plotly.graph_objs import Figure
 from webapp.charts import (
@@ -53,32 +55,43 @@ class PersonalStatsApp:
                 ui.label("0").classes("text-2xl")
 
         partner_choices = {"": "Any"}
-        position_choices = {"": "Any"}
+        position_choices: dict[int, str] = {}
         place_choices = {"": "Any"}
         try:
             partner_choices |= {str(pid): name for pid, name in self.service.partner_options()}
-            position_choices |= {str(pid): name for pid, name in self.service.position_options()}
+            position_choices = {pid: name for pid, name in self.service.position_options()}
             place_choices |= {str(pid): name for pid, name in self.service.place_options()}
         except DataSourceError as exc:
             self._set_status(str(exc))
 
         with ui.card().classes("w-full"):
             ui.label("Filters").classes("text-lg")
-            with ui.row().classes("items-end"):
-                start_date = ui.input("Start date (YYYY.MM.DD)", value="2024.01.01")
-                end_date = ui.input("End date (YYYY.MM.DD)", value="2024.12.31")
+            with ui.row().classes("items-end w-full gap-3"):
+                start_date = ui.date(value="2024-01-01", mask="YYYY-MM-DD").props("label='Start date'")
+                end_date = ui.date(value="2024-12-31", mask="YYYY-MM-DD").props("label='End date'")
                 note_keyword = ui.input("Note keyword contains", placeholder="optional")
                 partner = ui.select(partner_choices, label="Partner", value="")
-                position = ui.select(position_choices, label="Position", value="")
+                position_ids = ui.select(
+                    position_choices,
+                    label="Positions",
+                    value=[],
+                    multiple=True,
+                ).props("use-chips clearable")
                 place = ui.select(place_choices, label="Place", value="")
 
+                def _to_db_date(value: str | None) -> str | None:
+                    if not value:
+                        return None
+                    return datetime.strptime(value, "%Y-%m-%d").strftime("%Y.%m.%d")
+
                 def current_filters() -> SearchFilters:
+                    selected_positions = [int(v) for v in (position_ids.value or [])]
                     return SearchFilters(
-                        start_date=start_date.value or None,
-                        end_date=end_date.value or None,
+                        start_date=_to_db_date(start_date.value),
+                        end_date=_to_db_date(end_date.value),
                         note_keyword=note_keyword.value or None,
                         partner_id=int(partner.value) if partner.value else None,
-                        position_id=int(position.value) if position.value else None,
+                        position_ids=selected_positions or None,
                         place_id=int(place.value) if place.value else None,
                     )
 
@@ -104,6 +117,7 @@ class PersonalStatsApp:
                 rows=[],
                 pagination=20,
             ).classes("w-full")
+            self.table.on("rowClick", self.show_entry_dialog)
 
         with ui.card().classes("w-full"):
             ui.label("Chart: Partner Orgasms")
@@ -149,6 +163,11 @@ class PersonalStatsApp:
         self.status_label.text = message
         self.status_label.update()
 
+    def _render_plotly(self, container, fig: Figure) -> None:
+        container.clear()
+        with container:
+            ui.plotly(fig).classes("w-full").style("min-height: 26rem")
+
     def refresh_all(self, filters: SearchFilters) -> None:
         self.refresh_entries(filters)
         self.refresh_charts(filters)
@@ -167,6 +186,34 @@ class PersonalStatsApp:
             self.table.rows = []
             self.table.update()
             self._set_status(str(exc))
+
+    def show_entry_dialog(self, e) -> None:
+        row = e.args.get("row", {}) if hasattr(e, "args") else {}
+        with ui.dialog() as dialog, ui.card().classes("w-[42rem] max-w-[95vw]"):
+            ui.label(f"Entry #{row.get('entry_id', '')}").classes("text-xl font-semibold")
+            with ui.grid(columns=2).classes("w-full gap-x-6 gap-y-2"):
+                ui.label("Date:")
+                ui.label(str(row.get("date") or ""))
+                ui.label("Duration:")
+                ui.label(str(row.get("duration") or ""))
+                ui.label("Rating:")
+                ui.label(str(row.get("rating") or ""))
+                ui.label("My Orgasms:")
+                ui.label(str(row.get("total_org") or 0))
+                ui.label("Partner Orgasms:")
+                ui.label(str(row.get("total_org_partner") or 0))
+                ui.label("Partners:")
+                ui.label(str(row.get("partners") or ""))
+                ui.label("Positions:")
+                ui.label(str(row.get("positions") or ""))
+                ui.label("Places:")
+                ui.label(str(row.get("places") or ""))
+            ui.separator()
+            ui.label("Description").classes("font-medium")
+            ui.markdown(str(row.get("note") or "(No description)"))
+            with ui.row().classes("justify-end w-full"):
+                ui.button("Close", on_click=dialog.close)
+        dialog.open()
 
     def refresh_charts(self, filters: SearchFilters) -> None:
         for refresh_chart in (
@@ -192,9 +239,7 @@ class PersonalStatsApp:
             fig.update_layout(title="Partner Orgasms Over Time (data source error)")
             self._set_status(str(exc))
 
-        self.plot_container.clear()
-        with self.plot_container:
-            ui.plotly(fig)
+        self._render_plotly(self.plot_container, fig)
 
     def refresh_rating_chart(self, filters: SearchFilters) -> None:
         try:
@@ -205,10 +250,7 @@ class PersonalStatsApp:
             fig.update_layout(title="Rating Distribution (data source error)")
             self._set_status(str(exc))
 
-        self.rating_plot_container.clear()
-        with self.rating_plot_container:
-            ui.plotly(fig)
-
+        self._render_plotly(self.rating_plot_container, fig)
 
     def refresh_streak_chart(self, filters: SearchFilters) -> None:
         try:
@@ -219,9 +261,7 @@ class PersonalStatsApp:
             fig.update_layout(title="Sex Streaks Over Time (chart error)")
             self._set_status(str(exc))
 
-        self.streak_plot_container.clear()
-        with self.streak_plot_container:
-            ui.plotly(fig)
+        self._render_plotly(self.streak_plot_container, fig)
 
     def refresh_position_chart(self, filters: SearchFilters) -> None:
         try:
@@ -232,9 +272,7 @@ class PersonalStatsApp:
             fig.update_layout(title="Frequency of Sex Positions (chart error)")
             self._set_status(str(exc))
 
-        self.position_plot_container.clear()
-        with self.position_plot_container:
-            ui.plotly(fig)
+        self._render_plotly(self.position_plot_container, fig)
 
     def refresh_position_combinations_chart(self, filters: SearchFilters) -> None:
         try:
@@ -245,9 +283,7 @@ class PersonalStatsApp:
             fig.update_layout(title="Position Combination Frequency (chart error)")
             self._set_status(str(exc))
 
-        self.position_combo_plot_container.clear()
-        with self.position_combo_plot_container:
-            ui.plotly(fig)
+        self._render_plotly(self.position_combo_plot_container, fig)
 
     def refresh_position_upset_chart(self, filters: SearchFilters) -> None:
         try:
@@ -258,9 +294,7 @@ class PersonalStatsApp:
             fig.update_layout(title="Position Combination UpSet View (chart error)")
             self._set_status(str(exc))
 
-        self.position_upset_plot_container.clear()
-        with self.position_upset_plot_container:
-            ui.plotly(fig)
+        self._render_plotly(self.position_upset_plot_container, fig)
 
     def refresh_location_room_chart(self, filters: SearchFilters) -> None:
         try:
@@ -271,9 +305,7 @@ class PersonalStatsApp:
             fig.update_layout(title="Frequency of Location/Room Combinations (chart error)")
             self._set_status(str(exc))
 
-        self.location_room_plot_container.clear()
-        with self.location_room_plot_container:
-            ui.plotly(fig)
+        self._render_plotly(self.location_room_plot_container, fig)
 
     def export_csv(self, filters: SearchFilters) -> None:
         try:

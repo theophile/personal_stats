@@ -1,6 +1,6 @@
-import plotly.graph_objs as go
-import plotly.express as px
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objs as go
 
 
 def partner_orgasms_chart(df: pd.DataFrame) -> go.Figure:
@@ -10,30 +10,22 @@ def partner_orgasms_chart(df: pd.DataFrame) -> go.Figure:
         return fig
 
     fig.add_trace(
-        go.Scatter(
-            x=df["date"],
-            y=df["total_org_partner"],
-            mode="lines+markers",
-            name="Daily",
-        )
+        go.Scatter(x=df["date"], y=df["total_org_partner"], mode="lines+markers", name="Daily")
     )
     fig.add_trace(
-        go.Scatter(
-            x=df["date"],
-            y=df["trend"],
-            mode="lines",
-            line={"dash": "dash"},
-            name="30-day trend",
-        )
+        go.Scatter(x=df["date"], y=df["trend"], mode="lines", line={"dash": "dash"}, name="30-day trend")
     )
     fig.update_layout(
         title="Partner Orgasms Over Time",
         xaxis_title="Date",
         yaxis_title="Total Partner Orgasms",
-        width=1000,
+        autosize=True,
         height=500,
+        margin={"l": 40, "r": 20, "t": 60, "b": 40},
     )
+    fig.update_xaxes(rangeslider={"visible": True})
     return fig
+
 
 def rating_histogram_chart(df: pd.DataFrame) -> go.Figure:
     if df.empty:
@@ -48,7 +40,7 @@ def rating_histogram_chart(df: pd.DataFrame) -> go.Figure:
         title="Rating Distribution",
         labels={"rating": "Rating", "count": "Entries"},
     )
-    fig.update_layout(width=1000, height=400)
+    fig.update_layout(autosize=True, height=400, margin={"l": 40, "r": 20, "t": 60, "b": 40})
     return fig
 
 
@@ -82,9 +74,11 @@ def sex_streaks_chart(df: pd.DataFrame) -> go.Figure:
         xaxis_title="Date",
         yaxis_title="Streak Length (days)",
         barmode="overlay",
-        width=1000,
+        autosize=True,
         height=500,
+        margin={"l": 40, "r": 20, "t": 60, "b": 40},
     )
+    fig.update_xaxes(rangeslider={"visible": True})
     fig.update_yaxes(
         range=[-max_abs - 1, max_abs + 1],
         tickvals=list(range(-max_abs, max_abs + 1)),
@@ -109,7 +103,7 @@ def position_frequency_chart(df: pd.DataFrame) -> go.Figure:
         labels={"count": "Frequency", "position": "Position"},
         text="count",
     )
-    fig.update_layout(width=1000, height=500)
+    fig.update_layout(autosize=True, height=500, margin={"l": 40, "r": 20, "t": 60, "b": 60})
     return fig
 
 
@@ -127,7 +121,7 @@ def position_combinations_chart(df: pd.DataFrame) -> go.Figure:
         title="Position Combination Frequency (Top 15)",
         labels={"combination": "Combination", "count": "Count"},
     )
-    fig.update_layout(width=1000, height=500)
+    fig.update_layout(autosize=True, height=500, margin={"l": 40, "r": 20, "t": 60, "b": 80})
     return fig
 
 
@@ -172,8 +166,9 @@ def position_upset_chart(
 
     fig.update_layout(
         title={"text": title_text, "y": 0.95, "x": 0.5, "xanchor": "center"},
-        width=1000,
+        autosize=True,
         height=500,
+        margin={"l": 40, "r": 20, "t": 60, "b": 40},
     )
     return fig
 
@@ -201,7 +196,8 @@ def location_room_sankey_chart(df: pd.DataFrame) -> go.Figure:
     )
     fig.update_layout(
         title="Frequency of Location/Room Combinations",
-        width=1000,
+        autosize=True,
         height=550,
+        margin={"l": 20, "r": 20, "t": 60, "b": 20},
     )
     return fig
