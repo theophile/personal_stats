@@ -14,8 +14,6 @@ Optional environment variables:
 - `PERSONAL_STATS_DB_PATH` (default: `ascdatabase2.db`)
 - `PERSONAL_STATS_HOST` (default: `0.0.0.0`)
 - `PERSONAL_STATS_PORT` (default: `8080`)
-- `PERSONAL_STATS_UI_RELOAD` (default: `false`)
-- `PERSONAL_STATS_STORAGE_SECRET` (default: `personal-stats-local-secret`)
 
 ## Implemented (current stage)
 
@@ -27,8 +25,6 @@ Optional environment variables:
   - partner,
   - position,
   - place.
-  - filter state persistence across page reload/reconnects.
-    - Storage-backed filter persistence requires a configured storage secret.
 - Summary metric cards for filtered datasets (entries, my orgasms, partner orgasms).
 - Interactive Plotly charts:
   - partner orgasms over time with 30-day trend,
