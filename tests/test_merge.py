@@ -211,6 +211,47 @@ class MasterDbBuildTest(unittest.TestCase):
         self.assertEqual(source_rows, 1)
         conn.close()
 
+    def test_incremental_update_imports_only_new_entries(self):
+        first = build_master_database(
+            output_path=self.single_out_db,
+            sources=[SourceConfig(source_key="single", db_path=self.single_db, owner_name="Taylor")],
+            non_interactive=True,
+        )
+        self.assertEqual(first["report_count"], 1)
+
+        conn_src = sqlite3.connect(self.single_db)
+        conn_src.execute(
+            "INSERT INTO entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (22, 3, "2025.01.06", 25, "newly synced", 4, 1, 1, 1, 1),
+        )
+        conn_src.execute("INSERT INTO entry_partner VALUES (?, ?)", (22, 1))
+        conn_src.execute("INSERT INTO entry_position VALUES (?, ?)", (22, 8))
+        conn_src.execute("INSERT INTO entry_place VALUES (?, ?)", (22, 11))
+        conn_src.execute("INSERT INTO entry_sex_type VALUES (?, ?, ?)", (1, 22, 2))
+        conn_src.commit()
+        conn_src.close()
+
+        second = build_master_database(
+            output_path=self.single_out_db,
+            sources=[SourceConfig(source_key="single", db_path=self.single_db, owner_name="Taylor")],
+            non_interactive=True,
+            update_existing=True,
+        )
+        self.assertEqual(second["report_count"], 1)
+
+        conn = sqlite3.connect(self.single_out_db)
+        report_total = conn.execute("SELECT COUNT(*) FROM event_reports").fetchone()[0]
+        self.assertEqual(report_total, 2)
+
+        source_total = conn.execute("SELECT COUNT(*) FROM source_databases").fetchone()[0]
+        self.assertEqual(source_total, 1)
+
+        raw_entry_rows = conn.execute(
+            "SELECT COUNT(*) FROM raw_source_rows WHERE table_name='entries'"
+        ).fetchone()[0]
+        self.assertEqual(raw_entry_rows, 2)
+        conn.close()
+
 
 class MergeCliParsingTest(unittest.TestCase):
     def test_source_allows_plain_db_path(self):

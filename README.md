@@ -59,6 +59,7 @@ The key improvement is **schema design**, not engine replacement: the master DB 
 ```bash
 python merge_databases.py \
   --source /path/to/my.db \
+  --update-existing \
   --out single_master.db
 ```
 
@@ -106,6 +107,7 @@ python merge_databases.py \
 - If both durations exist, they must be within `--duration-tolerance`.
 - A source cannot contribute multiple reports to the same grouped event.
 - This supports either **single-source imports** (app works with one DB) or multi-source merges.
+- For periodic sync from an Android source DB that grows over time, use `--update-existing` to import only new source entries while preserving existing master rows and refreshing raw source snapshots.
 
 ## Troubleshooting
 

@@ -453,6 +453,101 @@ def _snapshot_source_raw_data(master_conn: sqlite3.Connection, source_id: int, d
         source_conn.close()
 
 
+def _validate_existing_master_schema(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT value FROM metadata WHERE key = 'schema_version'").fetchone()
+    if row is None:
+        raise ValueError("Existing output DB is missing metadata.schema_version; not a compatible master DB")
+    version = str(row[0])
+    if version != "3":
+        raise ValueError(
+            f"Existing output DB has schema_version={version}, but this importer expects schema_version=3"
+        )
+
+
+def _load_existing_event_states(conn: sqlite3.Connection) -> tuple[list[dict], int]:
+    event_rows = conn.execute(
+        "SELECT event_id, event_date, approx_duration FROM events ORDER BY event_id"
+    ).fetchall()
+    events: list[dict] = []
+    for row in event_rows:
+        source_rows = conn.execute(
+            """
+            SELECT DISTINCT sd.source_key
+            FROM event_reports er
+            JOIN source_databases sd ON sd.source_id = er.source_id
+            WHERE er.event_id = ?
+            """,
+            (int(row["event_id"]),),
+        ).fetchall()
+        events.append(
+            {
+                "event_id": int(row["event_id"]),
+                "date": str(row["event_date"]),
+                "duration": int(row["approx_duration"]) if row["approx_duration"] is not None else None,
+                "sources": {str(r[0]) for r in source_rows},
+            }
+        )
+
+    max_event_id = max((event["event_id"] for event in events), default=0)
+    return events, max_event_id
+
+
+def _assign_entries_to_master_events(
+    entries: list[SourceEntryRecord],
+    existing_events: list[dict],
+    next_event_id_start: int,
+    duration_tolerance: int,
+) -> tuple[dict[tuple[str, int], int], dict[int, list[SourceEntryRecord]], int]:
+    events = [
+        {
+            "event_id": event["event_id"],
+            "date": event["date"],
+            "duration": event["duration"],
+            "sources": set(event["sources"]),
+        }
+        for event in existing_events
+    ]
+    next_event_id = next_event_id_start
+    assignment_map: dict[tuple[str, int], int] = {}
+    new_event_rollup: dict[int, list[SourceEntryRecord]] = {}
+
+    for record in sorted(entries, key=lambda e: (e.date, e.entry_id, e.source_key)):
+        candidates = []
+        for event in events:
+            if event["date"] != record.date:
+                continue
+            if record.source_key in event["sources"]:
+                continue
+            if record.duration is not None and event["duration"] is not None:
+                if abs(record.duration - event["duration"]) > duration_tolerance:
+                    continue
+            penalty = 0
+            if record.duration is not None and event["duration"] is not None:
+                penalty = abs(record.duration - event["duration"])
+            candidates.append((event, penalty))
+
+        if candidates:
+            chosen, _ = min(candidates, key=lambda t: t[1])
+            chosen["sources"].add(record.source_key)
+            assignment_map[(record.source_key, record.entry_id)] = int(chosen["event_id"])
+            continue
+
+        event_id = next_event_id
+        next_event_id += 1
+        events.append(
+            {
+                "event_id": event_id,
+                "date": record.date,
+                "duration": record.duration,
+                "sources": {record.source_key},
+            }
+        )
+        assignment_map[(record.source_key, record.entry_id)] = event_id
+        new_event_rollup.setdefault(event_id, []).append(record)
+
+    return assignment_map, new_event_rollup, next_event_id
+
+
 def _insert_metadata(conn: sqlite3.Connection, duration_tolerance: int) -> None:
     conn.executemany(
         "INSERT INTO metadata (key, value) VALUES (?, ?)",
@@ -470,13 +565,17 @@ def build_master_database(
     sources: list[SourceConfig],
     duration_tolerance: int = 15,
     non_interactive: bool = False,
+    update_existing: bool = False,
 ) -> dict[str, int]:
     if not sources:
         raise ValueError("At least one source database is required")
 
     out = Path(output_path)
-    if out.exists():
+    creating_new = True
+    if out.exists() and not update_existing:
         out.unlink()
+    elif out.exists() and update_existing:
+        creating_new = False
 
     all_entries: list[SourceEntryRecord] = []
     source_partner_names: dict[str, dict[int, str]] = {}
@@ -491,32 +590,49 @@ def build_master_database(
         finally:
             conn.close()
 
-    assignments = assign_events(all_entries, duration_tolerance=duration_tolerance)
-    assignment_map = {(a.source_key, a.entry_id): a.event_id for a in assignments}
-
     conn = sqlite3.connect(out)
     conn.row_factory = sqlite3.Row
     try:
-        _initialize_master_schema(conn)
-        _insert_metadata(conn, duration_tolerance)
+        if creating_new:
+            _initialize_master_schema(conn)
+            _insert_metadata(conn, duration_tolerance)
+        else:
+            _validate_existing_master_schema(conn)
+            conn.execute(
+                "UPDATE metadata SET value = ? WHERE key = 'duration_tolerance'",
+                (str(duration_tolerance),),
+            )
 
-        person_ids: dict[str, int] = {}
         source_ids: dict[str, int] = {}
 
         for source in sources:
             person_id = _upsert_person(conn, source.owner_name)
-            person_ids[source.owner_name.casefold()] = person_id
-            cur = conn.execute(
-                "INSERT INTO source_databases (source_key, db_path, owner_person_id) VALUES (?, ?, ?)",
-                (source.source_key, str(source.db_path), person_id),
-            )
-            source_ids[source.source_key] = int(cur.lastrowid)
+            existing_source = conn.execute(
+                "SELECT source_id FROM source_databases WHERE source_key = ?", (source.source_key,)
+            ).fetchone()
+            if existing_source:
+                source_id = int(existing_source[0])
+                conn.execute(
+                    "UPDATE source_databases SET db_path = ?, owner_person_id = ? WHERE source_id = ?",
+                    (str(source.db_path), person_id, source_id),
+                )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO source_databases (source_key, db_path, owner_person_id) VALUES (?, ?, ?)",
+                    (source.source_key, str(source.db_path), person_id),
+                )
+                source_id = int(cur.lastrowid)
+            source_ids[source.source_key] = source_id
 
         raw_rows_copied = 0
         for source in sources:
+            source_id = source_ids[source.source_key]
+            conn.execute("DELETE FROM raw_source_rows WHERE source_id = ?", (source_id,))
+            conn.execute("DELETE FROM raw_source_columns WHERE source_id = ?", (source_id,))
+            conn.execute("DELETE FROM raw_source_objects WHERE source_id = ?", (source_id,))
             raw_rows_copied += _snapshot_source_raw_data(
                 master_conn=conn,
-                source_id=source_ids[source.source_key],
+                source_id=source_id,
                 db_path=source.db_path,
             )
 
@@ -525,12 +641,18 @@ def build_master_database(
         for source in sources:
             source_id = source_ids[source.source_key]
 
+            existing_partner_rows = conn.execute(
+                "SELECT source_partner_id FROM source_partners WHERE source_id = ?",
+                (source_id,),
+            ).fetchall()
+            existing_partner_ids = {int(row[0]) for row in existing_partner_rows}
+
             for partner_id, partner_name in sorted(source_partner_names[source.source_key].items()):
+                if partner_id in existing_partner_ids:
+                    continue
                 known_people = [row["name"] for row in conn.execute("SELECT name FROM people ORDER BY name").fetchall()]
-                mapped_name, is_new = _choose_partner_mapping(partner_name, known_people, non_interactive)
+                mapped_name, _ = _choose_partner_mapping(partner_name, known_people, non_interactive)
                 mapped_id = _upsert_person(conn, mapped_name)
-                if is_new:
-                    person_ids[mapped_name.casefold()] = mapped_id
 
                 conn.execute(
                     """
@@ -540,7 +662,15 @@ def build_master_database(
                     (source_id, partner_id, partner_name, mapped_id),
                 )
 
+            existing_position_rows = conn.execute(
+                "SELECT source_position_id FROM source_position_map WHERE source_id = ?",
+                (source_id,),
+            ).fetchall()
+            existing_position_ids = {int(row[0]) for row in existing_position_rows}
+
             for position_id, position_name in sorted(source_position_names[source.source_key].items()):
+                if position_id in existing_position_ids:
+                    continue
                 if not canonical_positions:
                     rows = conn.execute(
                         "SELECT canonical_name, canonical_position_id FROM canonical_positions ORDER BY canonical_name"
@@ -565,24 +695,36 @@ def build_master_database(
                     (source_id, position_id, position_name, canonical_positions[canonical_name]),
                 )
 
-        event_rollup: dict[int, list[SourceEntryRecord]] = {}
+        new_entries: list[SourceEntryRecord] = []
         for entry in all_entries:
-            event_id = assignment_map[(entry.source_key, entry.entry_id)]
-            event_rollup.setdefault(event_id, []).append(entry)
+            source_id = source_ids[entry.source_key]
+            already = conn.execute(
+                "SELECT 1 FROM event_reports WHERE source_id = ? AND source_entry_id = ?",
+                (source_id, entry.entry_id),
+            ).fetchone()
+            if already is None:
+                new_entries.append(entry)
 
-        for event_id, reports in sorted(event_rollup.items()):
+        existing_events, max_event_id = _load_existing_event_states(conn)
+        assignment_map, new_event_rollup, _ = _assign_entries_to_master_events(
+            entries=new_entries,
+            existing_events=existing_events,
+            next_event_id_start=max_event_id + 1,
+            duration_tolerance=duration_tolerance,
+        )
+
+        for event_id, reports in sorted(new_event_rollup.items()):
             durations = [r.duration for r in reports if r.duration is not None]
             conn.execute(
-                "INSERT INTO events (event_id, event_date, approx_duration, report_count) VALUES (?, ?, ?, ?)",
+                "INSERT INTO events (event_id, event_date, approx_duration, report_count) VALUES (?, ?, ?, 0)",
                 (
                     event_id,
                     reports[0].date,
                     int(sum(durations) / len(durations)) if durations else None,
-                    len(reports),
                 ),
             )
 
-        for entry in all_entries:
+        for entry in new_entries:
             source_id = source_ids[entry.source_key]
             event_id = assignment_map[(entry.source_key, entry.entry_id)]
             reporter_id = conn.execute(
@@ -646,15 +788,24 @@ def build_master_database(
                     (report_id, place_id),
                 )
 
-        conn.commit()
+        conn.execute(
+            """
+            UPDATE events
+            SET report_count = (
+                SELECT COUNT(*) FROM event_reports er WHERE er.event_id = events.event_id
+            )
+            """
+        )
 
-        matched_events = sum(1 for reports in event_rollup.values() if len(reports) > 1)
+        conn.commit()
+        total_events = int(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+        matched_events = int(conn.execute("SELECT COUNT(*) FROM events WHERE report_count > 1").fetchone()[0])
         return {
             "sources": len(sources),
-            "event_count": len(event_rollup),
-            "report_count": len(all_entries),
+            "event_count": total_events,
+            "report_count": len(new_entries),
             "matched_events": matched_events,
-            "single_report_events": len(event_rollup) - matched_events,
+            "single_report_events": total_events - matched_events,
             "raw_rows_copied": raw_rows_copied,
         }
     finally:

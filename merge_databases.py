@@ -47,6 +47,14 @@ def build_parser() -> argparse.ArgumentParser:
             "otherwise create new canonical records."
         ),
     )
+    parser.add_argument(
+        "--update-existing",
+        action="store_true",
+        help=(
+            "Update an existing master DB in place. Existing imported source rows are kept, "
+            "new source entries are incrementally appended, and raw source snapshots are refreshed."
+        ),
+    )
     return parser
 
 
@@ -108,6 +116,7 @@ def main() -> None:
         sources=sources,
         duration_tolerance=args.duration_tolerance,
         non_interactive=args.non_interactive,
+        update_existing=args.update_existing,
     )
 
     print(f"Master database written to: {args.out}")
