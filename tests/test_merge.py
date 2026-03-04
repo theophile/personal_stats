@@ -151,7 +151,9 @@ class MasterDbBuildTest(unittest.TestCase):
         )
 
         self.assertEqual(summary["sources"], 2)
+        self.assertEqual(summary["source_entries_seen"], 4)
         self.assertEqual(summary["report_count"], 4)
+        self.assertEqual(summary["skipped_existing_reports"], 0)
         self.assertEqual(summary["event_count"], 3)
         self.assertEqual(summary["matched_events"], 1)
 
@@ -200,6 +202,7 @@ class MasterDbBuildTest(unittest.TestCase):
             non_interactive=True,
         )
         self.assertEqual(summary["sources"], 1)
+        self.assertEqual(summary["source_entries_seen"], 1)
         self.assertEqual(summary["event_count"], 1)
         self.assertEqual(summary["matched_events"], 0)
         self.assertGreater(summary["raw_rows_copied"], 0)
@@ -218,6 +221,7 @@ class MasterDbBuildTest(unittest.TestCase):
             non_interactive=True,
         )
         self.assertEqual(first["report_count"], 1)
+        self.assertEqual(first["skipped_existing_reports"], 0)
 
         conn_src = sqlite3.connect(self.single_db)
         conn_src.execute(
@@ -238,6 +242,8 @@ class MasterDbBuildTest(unittest.TestCase):
             update_existing=True,
         )
         self.assertEqual(second["report_count"], 1)
+        self.assertEqual(second["source_entries_seen"], 2)
+        self.assertEqual(second["skipped_existing_reports"], 1)
 
         conn = sqlite3.connect(self.single_out_db)
         report_total = conn.execute("SELECT COUNT(*) FROM event_reports").fetchone()[0]
@@ -261,6 +267,7 @@ class MergeCliParsingTest(unittest.TestCase):
             out="master.db",
             duration_tolerance=15,
             non_interactive=False,
+            update_existing=False,
         )
         with patch("builtins.input", return_value="Alex"):
             sources = merge_cli._build_source_configs(args)
@@ -277,12 +284,52 @@ class MergeCliParsingTest(unittest.TestCase):
             out="master.db",
             duration_tolerance=15,
             non_interactive=False,
+            update_existing=False,
         )
 
         sources = merge_cli._build_source_configs(args)
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].source_key, "mine")
         self.assertEqual(sources[0].owner_name, "Alex")
+
+    def test_update_existing_prompts_owner_selection_from_known_people(self):
+        tmpdir = tempfile.TemporaryDirectory()
+        try:
+            source_db = Path(tmpdir.name) / "single_cli.db"
+            _create_source_db(
+                path=source_db,
+                owner_user_id=3,
+                owner_name="Taylor",
+                entries=[(21, 3, "2025.01.05", 35, "single only", 3, 1, 1, 1, 2)],
+                partners=[(1, 3, "Jordan")],
+                positions=[(8, 3, "Missionary")],
+                entry_partner=[(21, 1)],
+                entry_position=[(21, 8)],
+                entry_place=[(21, 11)],
+                entry_photo=[],
+                entry_sex_type=[],
+            )
+
+            master = Path(tmpdir.name) / "master.db"
+            build_master_database(
+                output_path=master,
+                sources=[SourceConfig(source_key="single", db_path=source_db, owner_name="Taylor")],
+                non_interactive=True,
+            )
+
+            args = Namespace(
+                source=["source1=ascdatabase2.db"],
+                owner=[],
+                out=str(master),
+                duration_tolerance=15,
+                non_interactive=False,
+                update_existing=True,
+            )
+            with patch("builtins.input", return_value="1"):
+                sources = merge_cli._build_source_configs(args)
+            self.assertEqual(sources[0].owner_name, "Taylor")
+        finally:
+            tmpdir.cleanup()
 
 
 if __name__ == "__main__":

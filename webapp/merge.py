@@ -800,10 +800,13 @@ def build_master_database(
         conn.commit()
         total_events = int(conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
         matched_events = int(conn.execute("SELECT COUNT(*) FROM events WHERE report_count > 1").fetchone()[0])
+        skipped_existing_reports = len(all_entries) - len(new_entries)
         return {
             "sources": len(sources),
+            "source_entries_seen": len(all_entries),
             "event_count": total_events,
             "report_count": len(new_entries),
+            "skipped_existing_reports": skipped_existing_reports,
             "matched_events": matched_events,
             "single_report_events": total_events - matched_events,
             "raw_rows_copied": raw_rows_copied,
