@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from difflib import get_close_matches
 from pathlib import Path
+import json
 import sqlite3
 
 
@@ -345,17 +346,121 @@ def _initialize_master_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (report_id, place_id),
             FOREIGN KEY (report_id) REFERENCES event_reports(report_id)
         );
+
+        CREATE TABLE raw_source_objects (
+            source_id INTEGER NOT NULL,
+            object_type TEXT NOT NULL,
+            object_name TEXT NOT NULL,
+            table_name TEXT,
+            sql TEXT,
+            PRIMARY KEY (source_id, object_type, object_name),
+            FOREIGN KEY (source_id) REFERENCES source_databases(source_id)
+        );
+
+        CREATE TABLE raw_source_columns (
+            source_id INTEGER NOT NULL,
+            table_name TEXT NOT NULL,
+            column_order INTEGER NOT NULL,
+            column_name TEXT NOT NULL,
+            declared_type TEXT,
+            is_not_null INTEGER NOT NULL,
+            default_value TEXT,
+            is_primary_key INTEGER NOT NULL,
+            PRIMARY KEY (source_id, table_name, column_order),
+            FOREIGN KEY (source_id) REFERENCES source_databases(source_id)
+        );
+
+        CREATE TABLE raw_source_rows (
+            source_id INTEGER NOT NULL,
+            table_name TEXT NOT NULL,
+            source_row_id INTEGER NOT NULL,
+            row_data_json TEXT NOT NULL,
+            PRIMARY KEY (source_id, table_name, source_row_id),
+            FOREIGN KEY (source_id) REFERENCES source_databases(source_id)
+        );
         """
     )
+
+
+def _snapshot_source_raw_data(master_conn: sqlite3.Connection, source_id: int, db_path: Path) -> int:
+    source_conn = _connect_readonly(db_path)
+    try:
+        objects = source_conn.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master
+            WHERE name NOT LIKE 'sqlite_%'
+            ORDER BY type, name
+            """
+        ).fetchall()
+
+        master_conn.executemany(
+            """
+            INSERT INTO raw_source_objects (source_id, object_type, object_name, table_name, sql)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (source_id, str(row["type"]), str(row["name"]), str(row["tbl_name"]), row["sql"])
+                for row in objects
+            ],
+        )
+
+        tables = [str(row["name"]) for row in objects if str(row["type"]) == "table"]
+        total_rows = 0
+        for table_name in tables:
+            columns = source_conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+            master_conn.executemany(
+                """
+                INSERT INTO raw_source_columns (
+                    source_id, table_name, column_order, column_name,
+                    declared_type, is_not_null, default_value, is_primary_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        source_id,
+                        table_name,
+                        int(col["cid"]),
+                        str(col["name"]),
+                        str(col["type"]) if col["type"] is not None else None,
+                        int(col["notnull"]),
+                        str(col["dflt_value"]) if col["dflt_value"] is not None else None,
+                        int(col["pk"]),
+                    )
+                    for col in columns
+                ],
+            )
+
+            rows = source_conn.execute(f'SELECT * FROM "{table_name}"').fetchall()
+            total_rows += len(rows)
+            master_conn.executemany(
+                """
+                INSERT INTO raw_source_rows (source_id, table_name, source_row_id, row_data_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (
+                        source_id,
+                        table_name,
+                        index,
+                        json.dumps(dict(row), ensure_ascii=False, sort_keys=True),
+                    )
+                    for index, row in enumerate(rows, start=1)
+                ],
+            )
+        return total_rows
+    finally:
+        source_conn.close()
 
 
 def _insert_metadata(conn: sqlite3.Connection, duration_tolerance: int) -> None:
     conn.executemany(
         "INSERT INTO metadata (key, value) VALUES (?, ?)",
         [
-            ("schema_version", "2"),
+            ("schema_version", "3"),
             ("duration_tolerance", str(duration_tolerance)),
             ("match_strategy", "same_date_plus_duration_tolerance"),
+            ("source_snapshot_mode", "full_sqlite_object_and_row_snapshot"),
         ],
     )
 
@@ -406,6 +511,14 @@ def build_master_database(
                 (source.source_key, str(source.db_path), person_id),
             )
             source_ids[source.source_key] = int(cur.lastrowid)
+
+        raw_rows_copied = 0
+        for source in sources:
+            raw_rows_copied += _snapshot_source_raw_data(
+                master_conn=conn,
+                source_id=source_ids[source.source_key],
+                db_path=source.db_path,
+            )
 
         canonical_positions: dict[str, int] = {}
 
@@ -542,6 +655,7 @@ def build_master_database(
             "report_count": len(all_entries),
             "matched_events": matched_events,
             "single_report_events": len(event_rollup) - matched_events,
+            "raw_rows_copied": raw_rows_copied,
         }
     finally:
         conn.close()

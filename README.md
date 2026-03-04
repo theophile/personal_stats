@@ -98,6 +98,7 @@ python merge_databases.py \
 - `event_reports`: one report per source entry (keeps each person's perspective).
 - `report_partners`: who each report says was involved (foundation for future orgasm-attribution logic).
 - `report_positions` and `report_places`: normalized per-report tags.
+- `raw_source_objects`, `raw_source_columns`, `raw_source_rows`: full-fidelity snapshot of source schema objects and row data so currently-unused source fields remain available for future features.
 
 ### Matching behavior
 

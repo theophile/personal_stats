@@ -116,6 +116,7 @@ def main() -> None:
     print(f"Master events created: {summary['event_count']}")
     print(f"Events with >1 report (matched): {summary['matched_events']}")
     print(f"Single-report events: {summary['single_report_events']}")
+    print(f"Raw source rows preserved: {summary['raw_rows_copied']}")
 
 
 if __name__ == "__main__":
