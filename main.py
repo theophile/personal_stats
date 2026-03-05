@@ -7,13 +7,17 @@ from webapp.ui import PersonalStatsApp
 
 
 def create_app() -> PersonalStatsApp:
+    """Create a fresh app instance for a single page/client."""
     db = ReadOnlyDatabase(DEFAULT_DB_PATH)
     service = StatsService(db)
-    app = PersonalStatsApp(service)
-    app.build()
-    return app
+    return PersonalStatsApp(service)
+
+
+@ui.page("/", reconnect_timeout=30)
+def index_page() -> None:
+    """Build the UI inside an explicit page to avoid shared auto-index state."""
+    create_app().build()
 
 
 if __name__ in {"__main__", "__mp_main__"}:
-    create_app()
     ui.run(host=DEFAULT_HOST, port=DEFAULT_PORT, title="Personal Stats", reload=False)
