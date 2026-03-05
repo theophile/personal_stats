@@ -196,6 +196,7 @@ class StatsService:
             SELECT
                 {self._entry_id_col()} AS entry_id,
                 {self._entry_date_col()} AS date,
+                e.reporter_person_id,
                 e.duration, e.note, e.rating, e.initiator,
                 e.safety_status, e.total_org, e.total_org_partner
             {self._entry_base_sql()}

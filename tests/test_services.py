@@ -119,6 +119,12 @@ class StatsServiceTest(unittest.TestCase):
         self.assertEqual(metrics["total_partner_orgasms"], 6)
         self.assertEqual(metrics["total_my_orgasms"], 4)
 
+    def test_summary_metrics_by_person_includes_reporter_orgasms(self):
+        totals = self.service.summary_metrics_by_person(SearchFilters())
+        self.assertEqual(totals.get("Taylor"), 4)
+        self.assertEqual(totals.get("Alex"), 5)
+        self.assertEqual(totals.get("Beth"), 1)
+
     def test_partner_orgasms_timeseries(self):
         try:
             df = self.service.partner_orgasms_timeseries(SearchFilters())

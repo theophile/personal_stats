@@ -48,6 +48,36 @@ class PersonalStatsApp:
         self.chart_output_container = None
         self.chart_specs: list[dict[str, object]] = []
 
+    def _display_date(self, value: str | None) -> str:
+        if not value:
+            return "(any date)"
+        for pattern in ("%Y.%m.%d", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(value, pattern)
+                return dt.strftime("%B %d, %Y").replace(" 0", " ")
+            except ValueError:
+                continue
+        return value
+
+    def _chart_subtitle(
+        self,
+        chart_label: str,
+        filters: SearchFilters,
+        people_ids: list[int],
+        person_choices: dict[str, str],
+    ) -> str:
+        start = self._display_date(filters.start_date)
+        end = self._display_date(filters.end_date)
+        subtitle = f"{chart_label} from {start} to {end}"
+        if people_ids:
+            people = ", ".join(person_choices.get(str(pid), str(pid)) for pid in people_ids)
+            subtitle += f" for sessions involving: {people}"
+        if filters.position_ids:
+            position_map = dict(self.service.position_options())
+            positions = ", ".join(position_map.get(int(pid), str(pid)) for pid in filters.position_ids)
+            subtitle += f" with positions: {positions}"
+        return subtitle
+
     def build(self) -> None:
         global _LAST_MILESTONES
         self.milestones = list(_LAST_MILESTONES)
@@ -243,12 +273,21 @@ class PersonalStatsApp:
 
             chart_type.on_value_change(lambda _: update_tip())
 
+            def update_trend_controls() -> None:
+                show_trend = chart_type.value == "orgasms"
+                include_trend.set_visibility(show_trend)
+                trend_kind.set_visibility(show_trend and bool(include_trend.value))
+
+            chart_type.on_value_change(lambda _: update_trend_controls())
+            include_trend.on_value_change(lambda _: update_trend_controls())
+            update_trend_controls()
+
             def add_chart() -> None:
                 spec = {
                     "type": chart_type.value,
                     "people": [int(v) for v in (chart_people.value or [])],
-                    "include_trend": bool(include_trend.value),
-                    "trend_kind": trend_kind.value,
+                    "include_trend": bool(include_trend.value) if chart_type.value == "orgasms" else False,
+                    "trend_kind": trend_kind.value if chart_type.value == "orgasms" else None,
                 }
                 self.chart_specs.append(spec)
                 self.render_chart_specs(current_filters(), person_choices)
@@ -338,7 +377,18 @@ class PersonalStatsApp:
         with self.chart_output_container:
             for index, spec in enumerate(self.chart_specs, start=1):
                 with ui.card().classes("w-full"):
-                    title = spec.get("type", "")
+                    title = {
+                        "orgasms": "Orgasms Over Time",
+                        "ratings": "Rating Distribution",
+                        "duration": "Duration Distribution by Person",
+                        "anomaly": "Orgasm Anomaly Detection",
+                        "streaks": "Sex Streaks",
+                        "position_frequency": "Position Frequency",
+                        "position_combos": "Position Combinations",
+                        "position_association": "Position Association Rules",
+                        "position_upset": "Position UpSet",
+                        "location_room": "Location/Room Links",
+                    }.get(str(spec.get("type")), str(spec.get("type")))
                     ui.label(f"Chart {index}: {title}").classes("text-lg")
                     people_ids = spec.get("people", []) or []
                     people_text = ", ".join(person_choices.get(str(pid), str(pid)) for pid in people_ids) or "All people"
@@ -352,25 +402,65 @@ class PersonalStatsApp:
         try:
             if chart_type == "orgasms":
                 df = self.service.orgasms_by_person_timeseries(filters, people_ids)
-                return partner_orgasms_chart(df, milestones=self.milestones, include_trend=bool(spec.get("include_trend", True)))
+                subtitle = self._chart_subtitle("Orgasms per session", filters, people_ids, person_choices)
+                return partner_orgasms_chart(
+                    df,
+                    milestones=self.milestones,
+                    include_trend=bool(spec.get("include_trend", True)),
+                    subtitle=subtitle,
+                )
             if chart_type == "ratings":
-                return rating_histogram_chart(self.service.ratings_dataframe(filters))
+                subtitle = self._chart_subtitle("Rating distribution", filters, people_ids, person_choices)
+                return rating_histogram_chart(self.service.ratings_dataframe(filters), subtitle=subtitle)
             if chart_type == "duration":
-                return duration_violin_chart(self.service.duration_by_partner_dataframe(filters))
+                subtitle = self._chart_subtitle("Session duration", filters, people_ids, person_choices)
+                return duration_violin_chart(self.service.duration_by_partner_dataframe(filters), subtitle=subtitle)
             if chart_type == "anomaly":
-                return rolling_anomaly_chart(self.service.partner_orgasms_anomaly_dataframe(filters), milestones=self.milestones)
+                subtitle = self._chart_subtitle("Orgasm anomaly detection", filters, people_ids, person_choices)
+                return rolling_anomaly_chart(
+                    self.service.partner_orgasms_anomaly_dataframe(filters),
+                    milestones=self.milestones,
+                    subtitle=subtitle,
+                )
             if chart_type == "streaks":
-                return sex_streaks_chart(self.service.sex_streaks_dataframe(filters), milestones=self.milestones)
+                subtitle = self._chart_subtitle("Sex streaks", filters, people_ids, person_choices)
+                return sex_streaks_chart(
+                    self.service.sex_streaks_dataframe(filters),
+                    milestones=self.milestones,
+                    subtitle=subtitle,
+                )
             if chart_type == "position_frequency":
-                return position_frequency_chart(self.service.position_frequency_dataframe(filters, require_people=people_ids))
+                subtitle = self._chart_subtitle("Position frequency", filters, people_ids, person_choices)
+                return position_frequency_chart(
+                    self.service.position_frequency_dataframe(filters, require_people=people_ids),
+                    subtitle=subtitle,
+                )
             if chart_type == "position_combos":
-                return position_combinations_chart(self.service.position_combinations_dataframe(filters, require_people=people_ids))
+                subtitle = self._chart_subtitle("Position combinations", filters, people_ids, person_choices)
+                return position_combinations_chart(
+                    self.service.position_combinations_dataframe(filters, require_people=people_ids),
+                    subtitle=subtitle,
+                )
             if chart_type == "position_association":
-                return position_association_chart(self.service.position_association_rules_dataframe(filters, require_people=people_ids))
+                subtitle = self._chart_subtitle("Position association rules", filters, people_ids, person_choices)
+                return position_association_chart(
+                    self.service.position_association_rules_dataframe(filters, require_people=people_ids),
+                    subtitle=subtitle,
+                )
             if chart_type == "position_upset":
-                return position_upset_chart(self.service.position_upset_dataframe(filters, require_people=people_ids), filters.start_date, filters.end_date)
+                subtitle = self._chart_subtitle("Position UpSet", filters, people_ids, person_choices)
+                return position_upset_chart(
+                    self.service.position_upset_dataframe(filters, require_people=people_ids),
+                    filters.start_date,
+                    filters.end_date,
+                    subtitle=subtitle,
+                )
             if chart_type == "location_room":
-                return location_room_sankey_chart(self.service.location_room_sankey_dataframe(filters))
+                subtitle = self._chart_subtitle("Location/Room links", filters, people_ids, person_choices)
+                return location_room_sankey_chart(
+                    self.service.location_room_sankey_dataframe(filters),
+                    subtitle=subtitle,
+                )
         except Exception as exc:
             self._set_status(f"Chart build failed: {exc}")
         fig = Figure()
