@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import asyncio
 
 from nicegui import ui
 from plotly.graph_objs import Figure
@@ -112,13 +113,13 @@ class PersonalStatsApp:
                     place_id=int(place.value) if place.value else None,
                 )
 
-            def save_and_refresh() -> None:
+            async def save_and_refresh() -> None:
                 filters = current_filters()
                 global _LAST_FILTERS
                 _LAST_FILTERS = filters
-                self.refresh_all(filters)
+                await self.refresh_all_async(filters)
 
-            def reset_filters() -> None:
+            async def reset_filters() -> None:
                 global _LAST_FILTERS
                 _LAST_FILTERS = SearchFilters(start_date="2024.01.01", end_date="2024.12.31")
                 start_date.value = "2024-01-01"
@@ -133,14 +134,14 @@ class PersonalStatsApp:
                 partner.update()
                 position_ids.update()
                 place.update()
-                self.refresh_all(_LAST_FILTERS)
+                await self.refresh_all_async(_LAST_FILTERS)
 
             with ui.dialog() as milestone_dialog, ui.card().classes("w-[34rem] max-w-[95vw]"):
                 ui.label("Add Milestone").classes("text-lg font-semibold")
                 milestone_date = ui.date(mask="YYYY-MM-DD").props("label='Milestone date'").classes("w-full")
                 milestone_label = ui.input("Milestone label", placeholder="e.g., Started supplement").classes("w-full")
 
-                def submit_milestone() -> None:
+                async def submit_milestone() -> None:
                     normalized_date = self._normalize_ui_date(milestone_date.value)
                     label = str(milestone_label.value or "").strip()
                     if not normalized_date or not label:
@@ -153,15 +154,18 @@ class PersonalStatsApp:
                     self._render_milestone_list()
                     self._set_status(f"Added milestone: {normalized_date} - {label}")
                     milestone_dialog.close()
-                    self.refresh_charts(current_filters())
+                    await self.refresh_charts_async(current_filters())
 
                 with ui.row().classes("w-full justify-end gap-2"):
                     ui.button("Cancel", on_click=milestone_dialog.close)
                     ui.button("Submit", on_click=submit_milestone)
 
+            async def clear_milestones_action() -> None:
+                await self.clear_milestones_async(current_filters)
+
             with ui.row().classes("w-full gap-2 flex-wrap"):
                 ui.button("Add Milestone", on_click=milestone_dialog.open)
-                ui.button("Clear Milestones", on_click=lambda: self.clear_milestones(current_filters))
+                ui.button("Clear Milestones", on_click=clear_milestones_action)
 
             with ui.row().classes("w-full") as milestone_list_row:
                 self.milestone_list_container = milestone_list_row
@@ -284,11 +288,15 @@ class PersonalStatsApp:
 
 
     def clear_milestones(self, current_filters_cb) -> None:
+        """Synchronous compatibility wrapper."""
+        ui.run_task(self.clear_milestones_async(current_filters_cb))
+
+    async def clear_milestones_async(self, current_filters_cb) -> None:
         self.milestones = []
         self._persist_milestones()
         self._render_milestone_list()
         self._set_status("Cleared milestones.")
-        self.refresh_charts(current_filters_cb())
+        await self.refresh_charts_async(current_filters_cb())
 
     def _metric_value_label(self, card) -> ui.label:
         return card.default_slot.children[1]
@@ -304,6 +312,13 @@ class PersonalStatsApp:
         self.status_label.update()
 
     def _render_plotly(self, container, fig: Figure) -> None:
+        children = getattr(container.default_slot, "children", [])
+        if children:
+            existing = children[0]
+            if hasattr(existing, "figure"):
+                existing.figure = fig
+                existing.update()
+                return
         container.clear()
         with container:
             ui.plotly(fig).classes("w-full").style("min-height: 26rem")
@@ -311,6 +326,16 @@ class PersonalStatsApp:
     def refresh_all(self, filters: SearchFilters) -> None:
         self.refresh_entries(filters)
         self.refresh_charts(filters)
+        try:
+            self._update_metrics(filters)
+        except DataSourceError as exc:
+            self._set_status(str(exc))
+
+    async def refresh_all_async(self, filters: SearchFilters) -> None:
+        self.refresh_entries(filters)
+        await asyncio.sleep(0)
+        await self.refresh_charts_async(filters)
+        await asyncio.sleep(0)
         try:
             self._update_metrics(filters)
         except DataSourceError as exc:
@@ -384,6 +409,25 @@ class PersonalStatsApp:
                 refresh_chart(filters)
             except Exception as exc:
                 self._set_status(f"Chart refresh failed: {exc}")
+
+    async def refresh_charts_async(self, filters: SearchFilters) -> None:
+        for refresh_chart in (
+            self.refresh_partner_org_chart,
+            self.refresh_rating_chart,
+            self.refresh_duration_chart,
+            self.refresh_anomaly_chart,
+            self.refresh_streak_chart,
+            self.refresh_position_chart,
+            self.refresh_position_combinations_chart,
+            self.refresh_association_chart,
+            self.refresh_position_upset_chart,
+            self.refresh_location_room_chart,
+        ):
+            try:
+                refresh_chart(filters)
+            except Exception as exc:
+                self._set_status(f"Chart refresh failed: {exc}")
+            await asyncio.sleep(0)
 
     def refresh_partner_org_chart(self, filters: SearchFilters) -> None:
         try:
