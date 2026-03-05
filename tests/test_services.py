@@ -97,7 +97,7 @@ class StatsServiceTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_search_entries_filters_partner(self):
-        rows = self.service.search_entries(SearchFilters(partner_id=2))
+        rows = self.service.search_entries(SearchFilters(person_ids=[2]))
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["entry_id"], 103)
 

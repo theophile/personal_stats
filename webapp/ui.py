@@ -44,8 +44,9 @@ class PersonalStatsApp:
         self.milestones: list[tuple[str, str]] = []
         self.milestone_list_container = None
         self.milestone_list_label = None
-        self.partner_metric = None
-        self.my_metric = None
+        self.person_metric_cards: dict[str, object] = {}
+        self.chart_output_container = None
+        self.chart_specs: list[dict[str, object]] = []
 
     def build(self) -> None:
         global _LAST_MILESTONES
@@ -57,29 +58,32 @@ class PersonalStatsApp:
 
         self.status_label = ui.label("").classes("text-red-600")
 
-        with ui.row().classes("w-full gap-4"):
+        person_choices: dict[str, str] = {}
+
+        with ui.row().classes("w-full gap-4 flex-wrap") as metrics_row:
             self.entries_metric = ui.card().classes("p-4").tight()
             with self.entries_metric:
                 ui.label("Entries")
                 ui.label("0").classes("text-2xl")
-            self.partner_metric = ui.card().classes("p-4").tight()
-            with self.partner_metric:
-                ui.label("Partner Orgasms")
-                ui.label("0").classes("text-2xl")
-            self.my_metric = ui.card().classes("p-4").tight()
-            with self.my_metric:
-                ui.label("My Orgasms")
-                ui.label("0").classes("text-2xl")
 
-        partner_choices = {"": "Any"}
+        partner_choices = {}
         position_choices: dict[int, str] = {}
         place_choices = {"": "Any"}
         try:
-            partner_choices |= {str(pid): name for pid, name in self.service.partner_options()}
+            partner_choices |= {str(pid): name for pid, name in self.service.people_options()}
+            person_choices = dict(partner_choices)
             position_choices = {pid: name for pid, name in self.service.position_options()}
             place_choices |= {str(pid): name for pid, name in self.service.place_options()}
         except DataSourceError as exc:
             self._set_status(str(exc))
+
+        for _, name in sorted(person_choices.items(), key=lambda item: item[1].lower()):
+            with metrics_row:
+                card = ui.card().classes("p-4").tight()
+                with card:
+                    ui.label(f"{name} Orgasms")
+                    ui.label("0").classes("text-2xl")
+            self.person_metric_cards[name] = card
 
         with ui.card().classes("w-full"):
             ui.label("Filters").classes("text-lg")
@@ -88,7 +92,7 @@ class PersonalStatsApp:
                 end_date = ui.date(value="2024-12-31", mask="YYYY-MM-DD").props("label='End date'").classes("w-full md:w-[14rem]")
                 with ui.column().classes("w-full md:flex-1 gap-2"):
                     note_keyword = ui.input("Note keyword contains", placeholder="optional").classes("w-full")
-                    partner = ui.select(partner_choices, label="Partner", value="").classes("w-full")
+                    people = ui.select(partner_choices, label="People", value=[], multiple=True).props("use-chips clearable").classes("w-full")
                     position_ids = ui.select(
                         position_choices,
                         label="Positions",
@@ -108,7 +112,7 @@ class PersonalStatsApp:
                     start_date=_to_db_date(start_date.value),
                     end_date=_to_db_date(end_date.value),
                     note_keyword=note_keyword.value or None,
-                    partner_id=int(partner.value) if partner.value else None,
+                    person_ids=[int(v) for v in (people.value or [])] or None,
                     position_ids=selected_positions or None,
                     place_id=int(place.value) if place.value else None,
                 )
@@ -125,13 +129,13 @@ class PersonalStatsApp:
                 start_date.value = "2024-01-01"
                 end_date.value = "2024-12-31"
                 note_keyword.value = ""
-                partner.value = ""
+                people.value = []
                 position_ids.value = []
                 place.value = ""
                 start_date.update()
                 end_date.update()
                 note_keyword.update()
-                partner.update()
+                people.update()
                 position_ids.update()
                 place.update()
                 await self.refresh_all_async(_LAST_FILTERS)
@@ -186,9 +190,9 @@ class PersonalStatsApp:
                     {"name": "date", "label": "Date", "field": "date"},
                     {"name": "duration", "label": "Duration", "field": "duration"},
                     {"name": "rating", "label": "Rating", "field": "rating"},
-                    {"name": "total_org", "label": "My Orgasms", "field": "total_org"},
-                    {"name": "total_org_partner", "label": "Partner Orgasms", "field": "total_org_partner"},
-                    {"name": "partners", "label": "Partners", "field": "partners"},
+                    {"name": "total_org", "label": "Reporter Orgasms", "field": "total_org"},
+                    {"name": "total_org_partner", "label": "Other People Orgasms", "field": "total_org_partner"},
+                    {"name": "partners", "label": "People", "field": "partners"},
                     {"name": "positions", "label": "Positions", "field": "positions"},
                     {"name": "places", "label": "Places", "field": "places"},
                 ],
@@ -197,56 +201,74 @@ class PersonalStatsApp:
             ).classes("w-full")
             self.table.on("rowClick", self.show_entry_dialog)
 
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Partner Orgasms")
-            self.plot_container = ui.column().classes("w-full")
+        chart_types = {
+            "orgasms": "Orgasms Over Time",
+            "ratings": "Rating Distribution",
+            "duration": "Duration Distribution by Person",
+            "anomaly": "Orgasm Anomaly Detection",
+            "streaks": "Sex Streaks",
+            "position_frequency": "Position Frequency",
+            "position_combos": "Position Combinations",
+            "position_association": "Position Association Rules",
+            "position_upset": "Position UpSet",
+            "location_room": "Location/Room Links",
+        }
+        chart_tips = {
+            "orgasms": "Time series of orgasms per selected person.",
+            "ratings": "Distribution of event ratings.",
+            "duration": "Duration spread grouped by people.",
+            "anomaly": "Flags unusual orgasm spikes against rolling baseline.",
+            "streaks": "Consecutive sex/no-sex day runs.",
+            "position_frequency": "How often each position appears.",
+            "position_combos": "Most common position combinations.",
+            "position_association": "Association rules for positions.",
+            "position_upset": "Set-intersection view of top positions.",
+            "location_room": "Location-to-room co-occurrence links.",
+        }
 
         with ui.card().classes("w-full"):
-            ui.label("Chart: Rating Distribution")
-            self.rating_plot_container = ui.column().classes("w-full")
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Duration Distribution by Partner")
-            self.duration_plot_container = ui.column().classes("w-full")
+            ui.label("Chart Builder").classes("text-lg")
+            chart_type = ui.select(chart_types, label="Chart Type", value="orgasms").classes("w-full md:w-[24rem]")
+            ui.tooltip_from_target(chart_type, "Select a chart type to configure and add.")
+            chart_people = ui.select(person_choices, label="People", value=[], multiple=True).props("use-chips clearable").classes("w-full")
+            include_trend = ui.switch("Include trend line", value=True)
+            trend_kind = ui.select({"rolling_30": "30-day rolling mean"}, label="Trend calculation", value="rolling_30").classes("w-full md:w-[20rem]")
 
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Partner Orgasm Anomaly Detection")
-            self.anomaly_plot_container = ui.column().classes("w-full")
+            tip_label = ui.label(chart_tips["orgasms"]).classes("text-sm text-gray-600")
 
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Sex Streaks")
-            self.streak_plot_container = ui.column().classes("w-full")
+            def update_tip() -> None:
+                tip_label.set_text(chart_tips.get(chart_type.value, ""))
+                tip_label.update()
 
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Position Frequency")
-            self.position_plot_container = ui.column().classes("w-full")
+            chart_type.on_value_change(lambda _: update_tip())
 
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Position Combinations")
-            self.position_combo_plot_container = ui.column().classes("w-full")
+            def add_chart() -> None:
+                spec = {
+                    "type": chart_type.value,
+                    "people": [int(v) for v in (chart_people.value or [])],
+                    "include_trend": bool(include_trend.value),
+                    "trend_kind": trend_kind.value,
+                }
+                self.chart_specs.append(spec)
+                self.render_chart_specs(current_filters(), person_choices)
+                self._set_status("Added chart.")
 
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Position Association Rules")
-            self.association_plot_container = ui.column().classes("w-full")
+            ui.button("Add Chart", on_click=add_chart)
 
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Position UpSet")
-            self.position_upset_plot_container = ui.column().classes("w-full")
-
-        with ui.card().classes("w-full"):
-            ui.label("Chart: Location/Room Links")
-            self.location_room_plot_container = ui.column().classes("w-full")
+        with ui.column().classes("w-full gap-4") as chart_out:
+            self.chart_output_container = chart_out
 
         initial_filters = _LAST_FILTERS or SearchFilters(start_date="2024.01.01", end_date="2024.12.31")
         start_date.value = datetime.strptime(initial_filters.start_date, "%Y.%m.%d").strftime("%Y-%m-%d") if initial_filters.start_date else None
         end_date.value = datetime.strptime(initial_filters.end_date, "%Y.%m.%d").strftime("%Y-%m-%d") if initial_filters.end_date else None
         note_keyword.value = initial_filters.note_keyword or ""
-        partner.value = str(initial_filters.partner_id) if initial_filters.partner_id else ""
+        people.value = [str(v) for v in (initial_filters.person_ids or [])]
         position_ids.value = initial_filters.position_ids or []
         place.value = str(initial_filters.place_id) if initial_filters.place_id else ""
         start_date.update()
         end_date.update()
         note_keyword.update()
-        partner.update()
+        people.update()
         position_ids.update()
         place.update()
         self._render_milestone_list()
@@ -303,9 +325,56 @@ class PersonalStatsApp:
 
     def _update_metrics(self, filters: SearchFilters) -> None:
         metrics = self.service.summary_metrics(filters)
+        by_person = self.service.summary_metrics_by_person(filters)
         self._metric_value_label(self.entries_metric).set_text(str(metrics["entries"]))
-        self._metric_value_label(self.partner_metric).set_text(str(metrics["total_partner_orgasms"]))
-        self._metric_value_label(self.my_metric).set_text(str(metrics["total_my_orgasms"]))
+        for person, card in self.person_metric_cards.items():
+            self._metric_value_label(card).set_text(str(by_person.get(person, 0)))
+
+    def render_chart_specs(self, filters: SearchFilters, person_choices: dict[str, str]) -> None:
+        if self.chart_output_container is None:
+            return
+        self.chart_output_container.clear()
+        with self.chart_output_container:
+            for index, spec in enumerate(self.chart_specs, start=1):
+                with ui.card().classes("w-full"):
+                    title = spec.get("type", "")
+                    ui.label(f"Chart {index}: {title}").classes("text-lg")
+                    people_ids = spec.get("people", []) or []
+                    people_text = ", ".join(person_choices.get(str(pid), str(pid)) for pid in people_ids) or "All people"
+                    ui.label(f"Parameters: people={people_text}; trend={spec.get('include_trend')}; trend_kind={spec.get('trend_kind')}").classes("text-sm text-gray-600")
+                    fig = self._build_chart(filters, spec, person_choices)
+                    ui.plotly(fig).classes("w-full").style("min-height: 26rem")
+
+    def _build_chart(self, filters: SearchFilters, spec: dict[str, object], person_choices: dict[str, str]) -> Figure:
+        chart_type = spec.get("type")
+        people_ids = [int(v) for v in (spec.get("people") or [])]
+        try:
+            if chart_type == "orgasms":
+                df = self.service.orgasms_by_person_timeseries(filters, people_ids)
+                return partner_orgasms_chart(df, milestones=self.milestones, include_trend=bool(spec.get("include_trend", True)))
+            if chart_type == "ratings":
+                return rating_histogram_chart(self.service.ratings_dataframe(filters))
+            if chart_type == "duration":
+                return duration_violin_chart(self.service.duration_by_partner_dataframe(filters))
+            if chart_type == "anomaly":
+                return rolling_anomaly_chart(self.service.partner_orgasms_anomaly_dataframe(filters), milestones=self.milestones)
+            if chart_type == "streaks":
+                return sex_streaks_chart(self.service.sex_streaks_dataframe(filters), milestones=self.milestones)
+            if chart_type == "position_frequency":
+                return position_frequency_chart(self.service.position_frequency_dataframe(filters, require_people=people_ids))
+            if chart_type == "position_combos":
+                return position_combinations_chart(self.service.position_combinations_dataframe(filters, require_people=people_ids))
+            if chart_type == "position_association":
+                return position_association_chart(self.service.position_association_rules_dataframe(filters, require_people=people_ids))
+            if chart_type == "position_upset":
+                return position_upset_chart(self.service.position_upset_dataframe(filters, require_people=people_ids), filters.start_date, filters.end_date)
+            if chart_type == "location_room":
+                return location_room_sankey_chart(self.service.location_room_sankey_dataframe(filters))
+        except Exception as exc:
+            self._set_status(f"Chart build failed: {exc}")
+        fig = Figure()
+        fig.update_layout(title="Chart unavailable")
+        return fig
 
     def _set_status(self, message: str) -> None:
         self.status_label.text = message
@@ -375,11 +444,11 @@ class PersonalStatsApp:
                 ui.label(str(row.get("duration") or ""))
                 ui.label("Rating:")
                 ui.label(str(row.get("rating") or ""))
-                ui.label("My Orgasms:")
+                ui.label("Reporter Orgasms:")
                 ui.label(str(row.get("total_org") or 0))
-                ui.label("Partner Orgasms:")
+                ui.label("Other People Orgasms:")
                 ui.label(str(row.get("total_org_partner") or 0))
-                ui.label("Partners:")
+                ui.label("People:")
                 ui.label(str(row.get("partners") or ""))
                 ui.label("Positions:")
                 ui.label(str(row.get("positions") or ""))
@@ -393,152 +462,12 @@ class PersonalStatsApp:
         dialog.open()
 
     def refresh_charts(self, filters: SearchFilters) -> None:
-        for refresh_chart in (
-            self.refresh_partner_org_chart,
-            self.refresh_rating_chart,
-            self.refresh_duration_chart,
-            self.refresh_anomaly_chart,
-            self.refresh_streak_chart,
-            self.refresh_position_chart,
-            self.refresh_position_combinations_chart,
-            self.refresh_association_chart,
-            self.refresh_position_upset_chart,
-            self.refresh_location_room_chart,
-        ):
-            try:
-                refresh_chart(filters)
-            except Exception as exc:
-                self._set_status(f"Chart refresh failed: {exc}")
+        options = {str(pid): name for pid, name in self.service.people_options()}
+        self.render_chart_specs(filters, options)
 
     async def refresh_charts_async(self, filters: SearchFilters) -> None:
-        for refresh_chart in (
-            self.refresh_partner_org_chart,
-            self.refresh_rating_chart,
-            self.refresh_duration_chart,
-            self.refresh_anomaly_chart,
-            self.refresh_streak_chart,
-            self.refresh_position_chart,
-            self.refresh_position_combinations_chart,
-            self.refresh_association_chart,
-            self.refresh_position_upset_chart,
-            self.refresh_location_room_chart,
-        ):
-            try:
-                refresh_chart(filters)
-            except Exception as exc:
-                self._set_status(f"Chart refresh failed: {exc}")
-            await asyncio.sleep(0)
-
-    def refresh_partner_org_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.partner_orgasms_timeseries(filters)
-            fig = partner_orgasms_chart(df, milestones=self.milestones)
-        except DataSourceError as exc:
-            fig = Figure()
-            fig.update_layout(title="Partner Orgasms Over Time (data source error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.plot_container, fig)
-
-    def refresh_rating_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.ratings_dataframe(filters)
-            fig = rating_histogram_chart(df)
-        except DataSourceError as exc:
-            fig = Figure()
-            fig.update_layout(title="Rating Distribution (data source error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.rating_plot_container, fig)
-
-    def refresh_duration_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.duration_by_partner_dataframe(filters)
-            fig = duration_violin_chart(df)
-        except DataSourceError as exc:
-            fig = Figure()
-            fig.update_layout(title="Duration Distribution by Partner (data source error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.duration_plot_container, fig)
-
-    def refresh_anomaly_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.partner_orgasms_anomaly_dataframe(filters)
-            fig = rolling_anomaly_chart(df, milestones=self.milestones)
-        except DataSourceError as exc:
-            fig = Figure()
-            fig.update_layout(title="Partner Orgasm Anomaly Detection (data source error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.anomaly_plot_container, fig)
-
-
-    def refresh_streak_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.sex_streaks_dataframe(filters)
-            fig = sex_streaks_chart(df, milestones=self.milestones)
-        except Exception as exc:
-            fig = Figure()
-            fig.update_layout(title="Sex Streaks Over Time (chart error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.streak_plot_container, fig)
-
-    def refresh_position_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.position_frequency_dataframe(filters)
-            fig = position_frequency_chart(df)
-        except Exception as exc:
-            fig = Figure()
-            fig.update_layout(title="Frequency of Sex Positions (chart error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.position_plot_container, fig)
-
-    def refresh_position_combinations_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.position_combinations_dataframe(filters)
-            fig = position_combinations_chart(df)
-        except Exception as exc:
-            fig = Figure()
-            fig.update_layout(title="Position Combination Frequency (chart error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.position_combo_plot_container, fig)
-
-    def refresh_association_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.position_association_rules_dataframe(filters)
-            fig = position_association_chart(df)
-        except Exception as exc:
-            fig = Figure()
-            fig.update_layout(title="Position Association Rules (chart error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.association_plot_container, fig)
-
-    def refresh_position_upset_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.position_upset_dataframe(filters)
-            fig = position_upset_chart(df, filters.start_date, filters.end_date)
-        except Exception as exc:
-            fig = Figure()
-            fig.update_layout(title="Position Combination UpSet View (chart error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.position_upset_plot_container, fig)
-
-    def refresh_location_room_chart(self, filters: SearchFilters) -> None:
-        try:
-            df = self.service.location_room_sankey_dataframe(filters)
-            fig = location_room_sankey_chart(df)
-        except Exception as exc:
-            fig = Figure()
-            fig.update_layout(title="Frequency of Location/Room Combinations (chart error)")
-            self._set_status(str(exc))
-
-        self._render_plotly(self.location_room_plot_container, fig)
+        self.refresh_charts(filters)
+        await asyncio.sleep(0)
 
     def export_csv(self, filters: SearchFilters) -> None:
         try:

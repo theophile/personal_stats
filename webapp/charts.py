@@ -40,23 +40,36 @@ def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = N
 def partner_orgasms_chart(
     df: pd.DataFrame,
     milestones: list[tuple[str, str]] | None = None,
+    include_trend: bool = True,
+    title: str = "Orgasms Over Time",
 ) -> go.Figure:
     fig = go.Figure()
     if df.empty:
-        fig.update_layout(title="Partner Orgasms Over Time (no results)")
+        fig.update_layout(title=f"{title} (no results)")
         _add_milestones(fig, milestones)
         return fig
 
-    fig.add_trace(
-        go.Scatter(x=df["date"], y=df["total_org_partner"], mode="lines+markers", name="Daily")
-    )
-    fig.add_trace(
-        go.Scatter(x=df["date"], y=df["trend"], mode="lines", line={"dash": "dash"}, name="30-day trend")
-    )
+    people = df["person"].unique().tolist() if "person" in df.columns else ["Daily"]
+    for person in people:
+        series = df[df["person"] == person] if "person" in df.columns else df
+        y_col = "orgasms" if "orgasms" in series.columns else "total_org_partner"
+        fig.add_trace(
+            go.Scatter(x=series["date"], y=series[y_col], mode="lines+markers", name=str(person))
+        )
+        if include_trend and "trend" in series.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=series["date"],
+                    y=series["trend"],
+                    mode="lines",
+                    line={"dash": "dash"},
+                    name=f"{person} trend",
+                )
+            )
     fig.update_layout(
-        title="Partner Orgasms Over Time",
+        title=title,
         xaxis_title="Date",
-        yaxis_title="Total Partner Orgasms",
+        yaxis_title="Orgasms",
         autosize=True,
         height=500,
         margin={"l": 40, "r": 20, "t": 60, "b": 40},
