@@ -97,9 +97,15 @@ class StatsServiceTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_search_entries_filters_partner(self):
-        rows = self.service.search_entries(SearchFilters(partner_id=2))
+        rows = self.service.search_entries(SearchFilters(person_ids=[2]))
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["entry_id"], 103)
+
+    def test_search_entries_people_list_includes_reporter(self):
+        rows = self.service.search_entries(SearchFilters())
+        by_id = {int(row["entry_id"]): row for row in rows}
+        self.assertIn("Taylor", str(by_id[101]["partners"]))
+        self.assertIn("Alex", str(by_id[101]["partners"]))
 
     def test_search_entries_filters_note_keyword(self):
         rows = self.service.search_entries(SearchFilters(note_keyword="second"))
@@ -118,6 +124,12 @@ class StatsServiceTest(unittest.TestCase):
         self.assertEqual(metrics["entries"], 3)
         self.assertEqual(metrics["total_partner_orgasms"], 6)
         self.assertEqual(metrics["total_my_orgasms"], 4)
+
+    def test_summary_metrics_by_person_includes_reporter_orgasms(self):
+        totals = self.service.summary_metrics_by_person(SearchFilters())
+        self.assertEqual(totals.get("Taylor"), 4)
+        self.assertEqual(totals.get("Alex"), 5)
+        self.assertEqual(totals.get("Beth"), 1)
 
     def test_partner_orgasms_timeseries(self):
         try:

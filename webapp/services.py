@@ -54,7 +54,7 @@ class SearchFilters:
     start_date: str | None = None
     end_date: str | None = None
     note_keyword: str | None = None
-    partner_id: int | None = None
+    person_ids: list[int] | None = None
     position_ids: list[int] | None = None
     place_id: int | None = None
 
@@ -124,10 +124,17 @@ class StatsService:
         sql = "SELECT place_id FROM report_places WHERE report_id = ?"
         return [int(r[0]) for r in cur.execute(sql, (entry_id,)).fetchall()]
 
-    def partner_options(self) -> list[tuple[int, str]]:
+    def people_options(self) -> list[tuple[int, str]]:
         self.ensure_expected_schema()
         mapping = self._fetch_id_name_map("partners")
         return sorted(mapping.items(), key=lambda x: x[1].lower())
+
+    def partner_options(self) -> list[tuple[int, str]]:
+        return self.people_options()
+
+    def person_name_map(self) -> dict[int, str]:
+        self.ensure_expected_schema()
+        return self._fetch_id_name_map("partners")
 
     def position_options(self) -> list[tuple[int, str]]:
         self.ensure_expected_schema()
@@ -153,11 +160,17 @@ class StatsService:
         if filters.note_keyword:
             clauses.append("LOWER(COALESCE(e.note, '')) LIKE ?")
             params.append(f"%{filters.note_keyword.lower()}%")
-        if filters.partner_id is not None:
+        if filters.person_ids:
+            placeholders = ", ".join("?" for _ in filters.person_ids)
             clauses.append(
-                "EXISTS (SELECT 1 FROM report_partners ep WHERE ep.report_id = e.report_id AND ep.partner_person_id = ?)"
+                "("
+                "e.reporter_person_id IN (" + placeholders + ") "
+                "OR EXISTS (SELECT 1 FROM report_partners ep WHERE ep.report_id = e.report_id "
+                "AND ep.partner_person_id IN (" + placeholders + "))"
+                ")"
             )
-            params.append(filters.partner_id)
+            params.extend(filters.person_ids)
+            params.extend(filters.person_ids)
         if filters.position_ids:
             placeholders = ", ".join("?" for _ in filters.position_ids)
             clauses.append(
@@ -183,6 +196,7 @@ class StatsService:
             SELECT
                 {self._entry_id_col()} AS entry_id,
                 {self._entry_date_col()} AS date,
+                e.reporter_person_id,
                 e.duration, e.note, e.rating, e.initiator,
                 e.safety_status, e.total_org, e.total_org_partner
             {self._entry_base_sql()}
@@ -205,13 +219,57 @@ class StatsService:
                     position_ids = self._position_ids_for_entry(cur, int(entry_id))
                     place_ids = self._place_ids_for_entry(cur, int(entry_id))
 
-                    entry["partners"] = ", ".join(partner_map.get(i, f"Unknown({i})") for i in partner_ids)
+                    reporter_name = partner_map.get(int(entry.get("reporter_person_id") or 0))
+                    people_involved: list[str] = []
+                    if reporter_name:
+                        people_involved.append(reporter_name)
+                    for i in partner_ids:
+                        partner_name = partner_map.get(i, f"Unknown({i})")
+                        if partner_name not in people_involved:
+                            people_involved.append(partner_name)
+                    entry["partners"] = ", ".join(people_involved)
                     entry["positions"] = ", ".join(position_map.get(i, f"Unknown({i})") for i in position_ids)
                     entry["places"] = ", ".join(PLACE_MAPPING.get(i, f"Unknown({i})") for i in place_ids)
+                    entry["person_orgasms"] = self._row_person_orgasms(cur, entry, partner_map)
 
             return entries
         except sqlite3.Error as exc:
             raise DataSourceError(f"Failed to query entries: {exc}") from exc
+
+
+    def _row_person_orgasms(self, cur: sqlite3.Cursor, row: dict[str, object], person_map: dict[int, str]) -> dict[str, int]:
+        totals = {name: 0 for name in person_map.values()}
+        reporter_id = int(row.get("reporter_person_id") or 0)
+        if reporter_id in person_map:
+            totals[person_map[reporter_id]] += int(row.get("total_org") or 0)
+
+        report_id = int(row.get("entry_id") or 0)
+        partner_rows = cur.execute(
+            "SELECT partner_person_id, orgasms_attributed FROM report_partners WHERE report_id = ?",
+            (report_id,),
+        ).fetchall()
+
+        unknown_partner_ids: list[int] = []
+        known_partner_total = 0
+        for partner_id, orgasms_attributed in partner_rows:
+            pid = int(partner_id)
+            if pid not in person_map:
+                continue
+            if orgasms_attributed is None:
+                unknown_partner_ids.append(pid)
+            else:
+                amount = int(orgasms_attributed)
+                known_partner_total += amount
+                totals[person_map[pid]] += amount
+
+        if unknown_partner_ids:
+            remaining = max(int(row.get("total_org_partner") or 0) - known_partner_total, 0)
+            base = remaining // len(unknown_partner_ids)
+            extra = remaining % len(unknown_partner_ids)
+            for index, pid in enumerate(unknown_partner_ids):
+                totals[person_map[pid]] += base + (1 if index < extra else 0)
+
+        return totals
 
     def _entry_ids_for_filters(self, filters: SearchFilters) -> list[int]:
         self.ensure_expected_schema()
@@ -223,6 +281,62 @@ class StatsService:
             return [int(r[0]) for r in rows]
         except sqlite3.Error as exc:
             raise DataSourceError(f"Failed to query filtered entry IDs: {exc}") from exc
+
+
+    def _entry_ids_for_all_people(self, filters: SearchFilters, person_ids: list[int]) -> list[int]:
+        entry_ids = self._entry_ids_for_filters(filters)
+        if not person_ids:
+            return entry_ids
+
+        required = set(person_ids)
+        out: list[int] = []
+        try:
+            with self.db.cursor() as cur:
+                for entry_id in entry_ids:
+                    reporter_row = cur.execute(
+                        "SELECT reporter_person_id FROM event_reports WHERE report_id = ?",
+                        (int(entry_id),),
+                    ).fetchone()
+                    reporter = int(reporter_row[0]) if reporter_row else None
+                    partners = set(self._partner_ids_for_entry(cur, int(entry_id)))
+                    participants = partners | ({reporter} if reporter is not None else set())
+                    if required.issubset(participants):
+                        out.append(entry_id)
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to query filtered entry IDs by people: {exc}") from exc
+
+        return out
+
+    def orgasms_by_person_timeseries(self, filters: SearchFilters, person_ids: list[int] | None = None):
+        self._require_pandas()
+        rows = self.search_entries(filters, limit=100000)
+        people_map = self.person_name_map()
+        selected = set(person_ids or people_map.keys())
+        inverse_map = {name: pid for pid, name in people_map.items()}
+
+        records: list[dict[str, object]] = []
+        for row in rows:
+            try:
+                event_date = pd.to_datetime(str(row.get("date")), format="%Y.%m.%d")
+            except Exception:
+                continue
+            orgasms = row.get("person_orgasms") or {}
+            if not isinstance(orgasms, dict):
+                continue
+            for person_name, count in orgasms.items():
+                person_id = inverse_map.get(str(person_name))
+                if person_id is None or person_id not in selected:
+                    continue
+                records.append({"date": event_date, "person": person_name, "orgasms": int(count or 0)})
+
+        df = pd.DataFrame(records, columns=["date", "person", "orgasms"])
+        if df.empty:
+            return df
+
+        daily = df.groupby(["date", "person"], as_index=False)["orgasms"].sum()
+        daily = daily.sort_values(["person", "date"])
+        daily["trend"] = daily.groupby("person")["orgasms"].transform(lambda s: s.rolling(window=30, min_periods=1).mean())
+        return daily
 
     def partner_orgasms_timeseries(self, filters: SearchFilters):
         self._require_pandas()
@@ -300,10 +414,10 @@ class StatsService:
         )
         return out[["start_date", "length", "signed_length", "type"]]
 
-    def position_frequency_dataframe(self, filters: SearchFilters):
+    def position_frequency_dataframe(self, filters: SearchFilters, require_people: list[int] | None = None):
         self._require_pandas()
         self.ensure_expected_schema()
-        entry_ids = self._entry_ids_for_filters(filters)
+        entry_ids = self._entry_ids_for_all_people(filters, require_people or [])
         if not entry_ids:
             return pd.DataFrame(columns=["position", "count"])
 
@@ -322,10 +436,10 @@ class StatsService:
             [{"position": name, "count": count} for name, count in counts.items()]
         )
 
-    def position_combinations_dataframe(self, filters: SearchFilters):
+    def position_combinations_dataframe(self, filters: SearchFilters, require_people: list[int] | None = None):
         self._require_pandas()
         self.ensure_expected_schema()
-        entry_ids = self._entry_ids_for_filters(filters)
+        entry_ids = self._entry_ids_for_all_people(filters, require_people or [])
         if not entry_ids:
             return pd.DataFrame(columns=["combination", "count"])
 
@@ -347,11 +461,10 @@ class StatsService:
         )
 
 
-    def position_upset_dataframe(self, filters: SearchFilters, max_positions: int = 6, min_instances: int = 1):
+    def position_upset_dataframe(self, filters: SearchFilters, max_positions: int = 6, min_instances: int = 1, require_people: list[int] | None = None):
         self._require_pandas()
         self.ensure_expected_schema()
-        filtered_rows = self.search_entries(filters, limit=100000)
-        entry_ids = [int(r["entry_id"]) for r in filtered_rows if r.get("entry_id") is not None]
+        entry_ids = self._entry_ids_for_all_people(filters, require_people or [])
         if not entry_ids:
             return pd.DataFrame()
 
@@ -477,10 +590,11 @@ class StatsService:
         filters: SearchFilters,
         min_support: float = 0.05,
         min_confidence: float = 0.3,
+        require_people: list[int] | None = None,
     ):
         self._require_pandas()
         self.ensure_expected_schema()
-        entry_ids = self._entry_ids_for_filters(filters)
+        entry_ids = self._entry_ids_for_all_people(filters, require_people or [])
         if not entry_ids:
             return pd.DataFrame(columns=["antecedent", "consequent", "support", "confidence", "lift", "count"])
 
@@ -566,6 +680,16 @@ class StatsService:
             "total_partner_orgasms": sum(int(r.get("total_org_partner") or 0) for r in rows),
             "total_my_orgasms": sum(int(r.get("total_org") or 0) for r in rows),
         }
+
+    def summary_metrics_by_person(self, filters: SearchFilters) -> dict[str, int]:
+        rows = self.search_entries(filters, limit=100000)
+        totals: Counter[str] = Counter()
+        for row in rows:
+            orgasms = row.get("person_orgasms") or {}
+            if isinstance(orgasms, dict):
+                for person, count in orgasms.items():
+                    totals[str(person)] += int(count or 0)
+        return dict(totals)
 
     def build_report(self, filters: SearchFilters, top_n: int = 5) -> dict:
         rows = self.search_entries(filters, limit=100000)

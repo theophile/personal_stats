@@ -13,7 +13,7 @@ def create_app() -> PersonalStatsApp:
     return PersonalStatsApp(service)
 
 
-@ui.page("/", reconnect_timeout=30)
+@ui.page("/", reconnect_timeout=300)
 def index_page() -> None:
     """Build the UI inside an explicit page to avoid shared auto-index state."""
     create_app().build()
