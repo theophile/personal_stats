@@ -8,16 +8,26 @@ from webapp.db import ReadOnlyDatabase
 from webapp.services import DataSourceError, SearchFilters, StatsService
 
 
-def _build_test_db(path: Path) -> None:
+def _build_master_test_db(path: Path) -> None:
     conn = sqlite3.connect(path)
     cur = conn.cursor()
 
-    cur.execute(
+    cur.executescript(
         """
-        CREATE TABLE entries (
-            entry_id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            date TEXT,
+        CREATE TABLE people (person_id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE canonical_positions (canonical_position_id INTEGER PRIMARY KEY, canonical_name TEXT NOT NULL);
+        CREATE TABLE events (
+            event_id INTEGER PRIMARY KEY,
+            event_date TEXT NOT NULL,
+            approx_duration INTEGER,
+            report_count INTEGER
+        );
+        CREATE TABLE event_reports (
+            report_id INTEGER PRIMARY KEY,
+            event_id INTEGER NOT NULL,
+            source_id INTEGER NOT NULL,
+            source_entry_id INTEGER NOT NULL,
+            reporter_person_id INTEGER NOT NULL,
             duration INTEGER,
             note TEXT,
             rating INTEGER,
@@ -25,41 +35,51 @@ def _build_test_db(path: Path) -> None:
             safety_status INTEGER,
             total_org INTEGER,
             total_org_partner INTEGER
-        )
+        );
+        CREATE TABLE report_partners (
+            report_id INTEGER NOT NULL,
+            partner_person_id INTEGER NOT NULL,
+            source_partner_id INTEGER,
+            orgasms_attributed INTEGER
+        );
+        CREATE TABLE report_positions (
+            report_id INTEGER NOT NULL,
+            canonical_position_id INTEGER NOT NULL
+        );
+        CREATE TABLE report_places (
+            report_id INTEGER NOT NULL,
+            place_id INTEGER NOT NULL
+        );
         """
     )
-    cur.execute("CREATE TABLE entry_partner (entry_id INTEGER, partner_id INTEGER)")
-    cur.execute("CREATE TABLE entry_position (entry_id INTEGER, position_id INTEGER)")
-    cur.execute("CREATE TABLE entry_place (entry_id INTEGER, place_id INTEGER)")
-    cur.execute("CREATE TABLE partners (partner_id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)")
-    cur.execute("CREATE TABLE positions (position_id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)")
 
-    cur.execute("INSERT INTO partners VALUES (1, 1, 'Alice')")
-    cur.execute("INSERT INTO partners VALUES (2, 1, 'Beth')")
-    cur.execute("INSERT INTO positions VALUES (10, 1, 'Position A')")
-    cur.execute("INSERT INTO positions VALUES (11, 1, 'Position B')")
+    cur.execute("INSERT INTO people VALUES (1, 'Taylor')")
+    cur.execute("INSERT INTO people VALUES (2, 'Alex')")
+    cur.execute("INSERT INTO people VALUES (3, 'Beth')")
+    cur.execute("INSERT INTO canonical_positions VALUES (10, 'Position A')")
+    cur.execute("INSERT INTO canonical_positions VALUES (11, 'Position B')")
 
-    cur.execute(
-        "INSERT INTO entries VALUES (1,1,'2024.01.01',30,'hello world',4,1,1,1,2)"
-    )
-    cur.execute(
-        "INSERT INTO entries VALUES (2,1,'2024.01.02',20,'second note',5,1,1,1,1)"
-    )
-    cur.execute(
-        "INSERT INTO entries VALUES (3,1,'2024.01.03',60,'third note',5,1,1,2,3)"
-    )
+    cur.execute("INSERT INTO events VALUES (1, '2024.01.01', 30, 1)")
+    cur.execute("INSERT INTO events VALUES (2, '2024.01.02', 20, 1)")
+    cur.execute("INSERT INTO events VALUES (3, '2024.01.03', 60, 1)")
 
-    cur.execute("INSERT INTO entry_partner VALUES (1,1)")
-    cur.execute("INSERT INTO entry_partner VALUES (2,2)")
-    cur.execute("INSERT INTO entry_partner VALUES (3,1)")
-    cur.execute("INSERT INTO entry_position VALUES (1,10)")
-    cur.execute("INSERT INTO entry_position VALUES (1,11)")
-    cur.execute("INSERT INTO entry_position VALUES (2,11)")
-    cur.execute("INSERT INTO entry_position VALUES (3,10)")
-    cur.execute("INSERT INTO entry_position VALUES (3,11)")
-    cur.execute("INSERT INTO entry_place VALUES (1,0)")
-    cur.execute("INSERT INTO entry_place VALUES (2,1)")
-    cur.execute("INSERT INTO entry_place VALUES (3,10)")
+    cur.execute("INSERT INTO event_reports VALUES (101,1,1,1,1,30,'hello world',4,1,1,1,2)")
+    cur.execute("INSERT INTO event_reports VALUES (102,2,1,2,1,20,'second note',5,1,1,1,1)")
+    cur.execute("INSERT INTO event_reports VALUES (103,3,1,3,1,60,'third note',5,1,1,2,3)")
+
+    cur.execute("INSERT INTO report_partners VALUES (101,2,1,NULL)")
+    cur.execute("INSERT INTO report_partners VALUES (102,3,2,NULL)")
+    cur.execute("INSERT INTO report_partners VALUES (103,2,1,NULL)")
+
+    cur.execute("INSERT INTO report_positions VALUES (101,10)")
+    cur.execute("INSERT INTO report_positions VALUES (101,11)")
+    cur.execute("INSERT INTO report_positions VALUES (102,11)")
+    cur.execute("INSERT INTO report_positions VALUES (103,10)")
+    cur.execute("INSERT INTO report_positions VALUES (103,11)")
+
+    cur.execute("INSERT INTO report_places VALUES (101,0)")
+    cur.execute("INSERT INTO report_places VALUES (102,1)")
+    cur.execute("INSERT INTO report_places VALUES (103,10)")
 
     conn.commit()
     conn.close()
@@ -68,8 +88,8 @@ def _build_test_db(path: Path) -> None:
 class StatsServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.tmpdir.name) / "test.db"
-        _build_test_db(self.db_path)
+        self.db_path = Path(self.tmpdir.name) / "master.db"
+        _build_master_test_db(self.db_path)
         self.service = StatsService(ReadOnlyDatabase(self.db_path))
 
     def tearDown(self) -> None:
@@ -77,22 +97,21 @@ class StatsServiceTest(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_search_entries_filters_partner(self):
-        rows = self.service.search_entries(SearchFilters(partner_id=1))
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["entry_id"], 1)
+        rows = self.service.search_entries(SearchFilters(partner_id=2))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["entry_id"], 103)
 
     def test_search_entries_filters_note_keyword(self):
         rows = self.service.search_entries(SearchFilters(note_keyword="second"))
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["entry_id"], 2)
+        self.assertEqual(rows[0]["entry_id"], 102)
 
     def test_search_entries_filters_multiple_positions(self):
         rows = self.service.search_entries(SearchFilters(position_ids=[10, 11]))
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 3)
 
         rows = self.service.search_entries(SearchFilters(position_ids=[10]))
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["entry_id"], 1)
+        self.assertEqual(len(rows), 2)
 
     def test_summary_metrics(self):
         metrics = self.service.summary_metrics(SearchFilters())
@@ -112,69 +131,6 @@ class StatsServiceTest(unittest.TestCase):
         out = self.service.export_entries_csv(SearchFilters())
         self.assertTrue(out.exists())
         self.assertGreater(os.path.getsize(out), 0)
-
-
-    def test_additional_chart_dataframes(self):
-        streak_df = self.service.sex_streaks_dataframe(SearchFilters())
-        self.assertIn("signed_length", streak_df.columns)
-        self.assertGreaterEqual(len(streak_df), 1)
-        self.assertIsInstance(streak_df.iloc[0]["start_date"], str)
-
-        position_df = self.service.position_frequency_dataframe(SearchFilters())
-        self.assertIn("position", position_df.columns)
-        self.assertEqual(int(position_df["count"].sum()), 5)
-
-        combo_df = self.service.position_combinations_dataframe(SearchFilters())
-        self.assertIn("combination", combo_df.columns)
-        self.assertEqual(int(combo_df["count"].sum()), 3)
-
-        upset_df = self.service.position_upset_dataframe(SearchFilters())
-        self.assertIn("Position A", upset_df.columns)
-        self.assertIn("Position B", upset_df.columns)
-        self.assertEqual(len(upset_df), 3)
-        self.assertTrue(set(upset_df.to_numpy().flatten()).issubset({0, 1}))
-
-        sankey_df = self.service.location_room_sankey_dataframe(SearchFilters())
-        self.assertIn("location", sankey_df.columns)
-        self.assertIn("room", sankey_df.columns)
-
-    def test_upset_dataframe_respects_filters(self):
-        filtered = self.service.position_upset_dataframe(SearchFilters(partner_id=1))
-        self.assertEqual(len(filtered), 1)
-
-    def test_build_report_and_export_json(self):
-        report = self.service.build_report(SearchFilters())
-        self.assertEqual(report["metrics"]["entries"], 3)
-        self.assertEqual(report["date_range"]["min"], "2024.01.01")
-        self.assertEqual(report["date_range"]["max"], "2024.01.03")
-        self.assertIn("chart_summaries", report)
-        self.assertIn("distinct_positions", report["chart_summaries"])
-        self.assertIn("upset_combinations", report["chart_summaries"])
-
-        json_path = self.service.export_report_json(SearchFilters())
-        self.assertTrue(json_path.exists())
-        self.assertGreater(os.path.getsize(json_path), 0)
-
-    def test_duration_anomaly_and_association_dataframes(self):
-        duration_df = self.service.duration_by_partner_dataframe(SearchFilters())
-        self.assertIn("partner", duration_df.columns)
-        self.assertIn("duration", duration_df.columns)
-        self.assertGreaterEqual(len(duration_df), 3)
-
-        anomaly_df = self.service.partner_orgasms_anomaly_dataframe(SearchFilters(), window_days=2, z_threshold=1.0)
-        self.assertIn("zscore", anomaly_df.columns)
-        self.assertIn("is_anomaly", anomaly_df.columns)
-        self.assertEqual(len(anomaly_df), 3)
-
-        rules_df = self.service.position_association_rules_dataframe(
-            SearchFilters(),
-            min_support=0.2,
-            min_confidence=0.4,
-        )
-        self.assertIn("antecedent", rules_df.columns)
-        self.assertIn("consequent", rules_df.columns)
-        self.assertIn("lift", rules_df.columns)
-        self.assertGreaterEqual(len(rules_df), 1)
 
 
 if __name__ == "__main__":

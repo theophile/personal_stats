@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import pandas as pd
 from pathlib import Path
 import sqlite3
 import tempfile
 import csv
 import json
 from collections import Counter
+
+try:
+    import pandas as pd
+except ModuleNotFoundError:  # pragma: no cover - exercised in dependency-limited environments
+    pd = None
 
 from webapp.db import ReadOnlyDatabase
 
@@ -73,12 +77,13 @@ class StatsService:
 
     def ensure_expected_schema(self) -> None:
         expected = {
-            "entries",
-            "entry_partner",
-            "entry_position",
-            "entry_place",
-            "partners",
-            "positions",
+            "events",
+            "event_reports",
+            "report_partners",
+            "report_positions",
+            "report_places",
+            "people",
+            "canonical_positions",
         }
         available = set(self.list_tables())
         missing = sorted(expected - available)
@@ -89,9 +94,35 @@ class StatsService:
             )
 
     def _fetch_id_name_map(self, table: str) -> dict[int, str]:
+        table_sql = {"partners": "people", "positions": "canonical_positions"}.get(table, table)
         with self.db.cursor() as cur:
-            rows = cur.execute(f"SELECT * FROM {table}").fetchall()
-        return {int(row[0]): str(row[2]) for row in rows}
+            rows = cur.execute(f"SELECT * FROM {table_sql}").fetchall()
+        return {int(row[0]): str(row[1]) for row in rows}
+
+    def _entry_base_sql(self) -> str:
+        return "FROM event_reports e JOIN events ev ON ev.event_id = e.event_id"
+
+    def _entry_date_col(self) -> str:
+        return "ev.event_date"
+
+    def _entry_id_col(self) -> str:
+        return "e.report_id"
+
+    def _require_pandas(self) -> None:
+        if pd is None:
+            raise DataSourceError("pandas is required for dataframe/chart operations")
+
+    def _partner_ids_for_entry(self, cur: sqlite3.Cursor, entry_id: int) -> list[int]:
+        sql = "SELECT partner_person_id FROM report_partners WHERE report_id = ?"
+        return [int(r[0]) for r in cur.execute(sql, (entry_id,)).fetchall()]
+
+    def _position_ids_for_entry(self, cur: sqlite3.Cursor, entry_id: int) -> list[int]:
+        sql = "SELECT canonical_position_id FROM report_positions WHERE report_id = ?"
+        return [int(r[0]) for r in cur.execute(sql, (entry_id,)).fetchall()]
+
+    def _place_ids_for_entry(self, cur: sqlite3.Cursor, entry_id: int) -> list[int]:
+        sql = "SELECT place_id FROM report_places WHERE report_id = ?"
+        return [int(r[0]) for r in cur.execute(sql, (entry_id,)).fetchall()]
 
     def partner_options(self) -> list[tuple[int, str]]:
         self.ensure_expected_schema()
@@ -111,31 +142,33 @@ class StatsService:
         clauses = []
         params: list[object] = []
 
+        date_col = self._entry_date_col()
+
         if filters.start_date:
-            clauses.append("e.date >= ?")
+            clauses.append(f"{date_col} >= ?")
             params.append(filters.start_date)
         if filters.end_date:
-            clauses.append("e.date <= ?")
+            clauses.append(f"{date_col} <= ?")
             params.append(filters.end_date)
         if filters.note_keyword:
             clauses.append("LOWER(COALESCE(e.note, '')) LIKE ?")
             params.append(f"%{filters.note_keyword.lower()}%")
         if filters.partner_id is not None:
             clauses.append(
-                "EXISTS (SELECT 1 FROM entry_partner ep WHERE ep.entry_id = e.entry_id AND ep.partner_id = ?)"
+                "EXISTS (SELECT 1 FROM report_partners ep WHERE ep.report_id = e.report_id AND ep.partner_person_id = ?)"
             )
             params.append(filters.partner_id)
         if filters.position_ids:
             placeholders = ", ".join("?" for _ in filters.position_ids)
             clauses.append(
-                "EXISTS (SELECT 1 FROM entry_position epo "
-                "WHERE epo.entry_id = e.entry_id "
-                f"AND epo.position_id IN ({placeholders}))"
+                "EXISTS (SELECT 1 FROM report_positions epo "
+                "WHERE epo.report_id = e.report_id "
+                f"AND epo.canonical_position_id IN ({placeholders}))"
             )
             params.extend(filters.position_ids)
         if filters.place_id is not None:
             clauses.append(
-                "EXISTS (SELECT 1 FROM entry_place epl WHERE epl.entry_id = e.entry_id AND epl.place_id = ?)"
+                "EXISTS (SELECT 1 FROM report_places epl WHERE epl.report_id = e.report_id AND epl.place_id = ?)"
             )
             params.append(filters.place_id)
 
@@ -147,11 +180,14 @@ class StatsService:
         where, params = self._build_where_clause(filters)
 
         query = f"""
-            SELECT e.entry_id, e.date, e.duration, e.note, e.rating, e.initiator,
-                   e.safety_status, e.total_org, e.total_org_partner
-            FROM entries e
+            SELECT
+                {self._entry_id_col()} AS entry_id,
+                {self._entry_date_col()} AS date,
+                e.duration, e.note, e.rating, e.initiator,
+                e.safety_status, e.total_org, e.total_org_partner
+            {self._entry_base_sql()}
             {where}
-            ORDER BY e.date DESC
+            ORDER BY {self._entry_date_col()} DESC
             LIMIT ?
         """
         params.append(limit)
@@ -165,24 +201,9 @@ class StatsService:
 
                 for entry in entries:
                     entry_id = entry["entry_id"]
-                    partner_ids = [
-                        int(r[0])
-                        for r in cur.execute(
-                            "SELECT partner_id FROM entry_partner WHERE entry_id = ?", (entry_id,)
-                        ).fetchall()
-                    ]
-                    position_ids = [
-                        int(r[0])
-                        for r in cur.execute(
-                            "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
-                        ).fetchall()
-                    ]
-                    place_ids = [
-                        int(r[0])
-                        for r in cur.execute(
-                            "SELECT place_id FROM entry_place WHERE entry_id = ?", (entry_id,)
-                        ).fetchall()
-                    ]
+                    partner_ids = self._partner_ids_for_entry(cur, int(entry_id))
+                    position_ids = self._position_ids_for_entry(cur, int(entry_id))
+                    place_ids = self._place_ids_for_entry(cur, int(entry_id))
 
                     entry["partners"] = ", ".join(partner_map.get(i, f"Unknown({i})") for i in partner_ids)
                     entry["positions"] = ", ".join(position_map.get(i, f"Unknown({i})") for i in position_ids)
@@ -195,7 +216,7 @@ class StatsService:
     def _entry_ids_for_filters(self, filters: SearchFilters) -> list[int]:
         self.ensure_expected_schema()
         where, params = self._build_where_clause(filters)
-        query = f"SELECT e.entry_id FROM entries e {where} ORDER BY e.date"
+        query = f"SELECT {self._entry_id_col()} AS entry_id {self._entry_base_sql()} {where} ORDER BY {self._entry_date_col()}"
         try:
             with self.db.cursor() as cur:
                 rows = cur.execute(query, params).fetchall()
@@ -204,9 +225,13 @@ class StatsService:
             raise DataSourceError(f"Failed to query filtered entry IDs: {exc}") from exc
 
     def partner_orgasms_timeseries(self, filters: SearchFilters):
+        self._require_pandas()
         self.ensure_expected_schema()
         where, params = self._build_where_clause(filters)
-        query = f"SELECT e.date, e.total_org_partner FROM entries e {where} ORDER BY e.date"
+        query = (
+            f"SELECT {self._entry_date_col()} AS date, e.total_org_partner "
+            f"{self._entry_base_sql()} {where} ORDER BY {self._entry_date_col()}"
+        )
 
         try:
             with self.db.cursor() as cur:
@@ -224,13 +249,15 @@ class StatsService:
         return daily
 
     def ratings_dataframe(self, filters: SearchFilters):
+        self._require_pandas()
         rows = self.search_entries(filters, limit=100000)
         return pd.DataFrame(rows)
 
     def sex_streaks_dataframe(self, filters: SearchFilters):
+        self._require_pandas()
         self.ensure_expected_schema()
         where, params = self._build_where_clause(filters)
-        query = f"SELECT DISTINCT e.date FROM entries e {where} ORDER BY e.date"
+        query = f"SELECT DISTINCT {self._entry_date_col()} AS date {self._entry_base_sql()} {where} ORDER BY {self._entry_date_col()}"
         try:
             with self.db.cursor() as cur:
                 rows = cur.execute(query, params).fetchall()
@@ -274,6 +301,7 @@ class StatsService:
         return out[["start_date", "length", "signed_length", "type"]]
 
     def position_frequency_dataframe(self, filters: SearchFilters):
+        self._require_pandas()
         self.ensure_expected_schema()
         entry_ids = self._entry_ids_for_filters(filters)
         if not entry_ids:
@@ -284,12 +312,7 @@ class StatsService:
                 position_map = self._fetch_id_name_map("positions")
                 counts: Counter[str] = Counter()
                 for entry_id in entry_ids:
-                    position_ids = [
-                        int(r[0])
-                        for r in cur.execute(
-                            "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
-                        ).fetchall()
-                    ]
+                    position_ids = self._position_ids_for_entry(cur, int(entry_id))
                     for pid in position_ids:
                         counts[position_map.get(pid, f"Unknown({pid})")] += 1
         except sqlite3.Error as exc:
@@ -300,6 +323,7 @@ class StatsService:
         )
 
     def position_combinations_dataframe(self, filters: SearchFilters):
+        self._require_pandas()
         self.ensure_expected_schema()
         entry_ids = self._entry_ids_for_filters(filters)
         if not entry_ids:
@@ -310,14 +334,7 @@ class StatsService:
                 position_map = self._fetch_id_name_map("positions")
                 combo_counter: Counter[str] = Counter()
                 for entry_id in entry_ids:
-                    position_ids = sorted(
-                        {
-                            int(r[0])
-                            for r in cur.execute(
-                                "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
-                            ).fetchall()
-                        }
-                    )
+                    position_ids = sorted(set(self._position_ids_for_entry(cur, int(entry_id))))
                     if not position_ids:
                         continue
                     label = " + ".join(position_map.get(pid, f"Unknown({pid})") for pid in position_ids)
@@ -331,6 +348,7 @@ class StatsService:
 
 
     def position_upset_dataframe(self, filters: SearchFilters, max_positions: int = 6, min_instances: int = 1):
+        self._require_pandas()
         self.ensure_expected_schema()
         filtered_rows = self.search_entries(filters, limit=100000)
         entry_ids = [int(r["entry_id"]) for r in filtered_rows if r.get("entry_id") is not None]
@@ -350,14 +368,7 @@ class StatsService:
                 entry_positions: list[list[int]] = []
 
                 for entry_id in entry_ids:
-                    position_ids = sorted(
-                        {
-                            int(r[0])
-                            for r in cur.execute(
-                                "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
-                            ).fetchall()
-                        }
-                    )
+                    position_ids = sorted(set(self._position_ids_for_entry(cur, int(entry_id))))
                     if not position_ids:
                         continue
                     entry_positions.append(position_ids)
@@ -386,6 +397,7 @@ class StatsService:
         return df[df.sum().sort_values(ascending=True).keys()]
 
     def location_room_sankey_dataframe(self, filters: SearchFilters):
+        self._require_pandas()
         self.ensure_expected_schema()
         entry_ids = self._entry_ids_for_filters(filters)
         if not entry_ids:
@@ -395,12 +407,7 @@ class StatsService:
         try:
             with self.db.cursor() as cur:
                 for entry_id in entry_ids:
-                    place_ids = [
-                        int(r[0])
-                        for r in cur.execute(
-                            "SELECT place_id FROM entry_place WHERE entry_id = ?", (entry_id,)
-                        ).fetchall()
-                    ]
+                    place_ids = self._place_ids_for_entry(cur, int(entry_id))
                     locations = [PLACE_MAPPING[p] for p in place_ids if p in LOCATION_IDS and p in PLACE_MAPPING]
                     rooms = [PLACE_MAPPING[p] for p in place_ids if p in ROOM_IDS and p in PLACE_MAPPING]
                     for location in locations:
@@ -418,6 +425,7 @@ class StatsService:
 
 
     def duration_by_partner_dataframe(self, filters: SearchFilters):
+        self._require_pandas()
         self.ensure_expected_schema()
         rows = self.search_entries(filters, limit=100000)
         records: list[dict[str, object]] = []
@@ -443,6 +451,7 @@ class StatsService:
         window_days: int = 30,
         z_threshold: float = 2.0,
     ):
+        self._require_pandas()
         daily = self.partner_orgasms_timeseries(filters)
         if daily.empty:
             return pd.DataFrame(columns=["date", "value", "baseline", "rolling_std", "zscore", "is_anomaly"])
@@ -469,6 +478,7 @@ class StatsService:
         min_support: float = 0.05,
         min_confidence: float = 0.3,
     ):
+        self._require_pandas()
         self.ensure_expected_schema()
         entry_ids = self._entry_ids_for_filters(filters)
         if not entry_ids:
@@ -479,12 +489,7 @@ class StatsService:
                 position_map = self._fetch_id_name_map("positions")
                 transactions: list[set[int]] = []
                 for entry_id in entry_ids:
-                    ids = {
-                        int(r[0])
-                        for r in cur.execute(
-                            "SELECT position_id FROM entry_position WHERE entry_id = ?", (entry_id,)
-                        ).fetchall()
-                    }
+                    ids = set(self._position_ids_for_entry(cur, int(entry_id)))
                     if ids:
                         transactions.append(ids)
         except sqlite3.Error as exc:
