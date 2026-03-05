@@ -229,7 +229,8 @@ class PersonalStatsApp:
         with ui.card().classes("w-full"):
             ui.label("Chart Builder").classes("text-lg")
             chart_type = ui.select(chart_types, label="Chart Type", value="orgasms").classes("w-full md:w-[24rem]")
-            ui.tooltip_from_target(chart_type, "Select a chart type to configure and add.")
+            with chart_type:
+                ui.tooltip("Select a chart type to configure and add.")
             chart_people = ui.select(person_choices, label="People", value=[], multiple=True).props("use-chips clearable").classes("w-full")
             include_trend = ui.switch("Include trend line", value=True)
             trend_kind = ui.select({"rolling_30": "30-day rolling mean"}, label="Trend calculation", value="rolling_30").classes("w-full md:w-[20rem]")
