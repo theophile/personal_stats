@@ -101,6 +101,12 @@ class StatsServiceTest(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["entry_id"], 103)
 
+    def test_search_entries_people_list_includes_reporter(self):
+        rows = self.service.search_entries(SearchFilters())
+        by_id = {int(row["entry_id"]): row for row in rows}
+        self.assertIn("Taylor", str(by_id[101]["partners"]))
+        self.assertIn("Alex", str(by_id[101]["partners"]))
+
     def test_search_entries_filters_note_keyword(self):
         rows = self.service.search_entries(SearchFilters(note_keyword="second"))
         self.assertEqual(len(rows), 1)

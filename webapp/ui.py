@@ -23,6 +23,7 @@ from webapp.services import DataSourceError, SearchFilters, StatsService
 
 _LAST_FILTERS: SearchFilters | None = None
 _LAST_MILESTONES: list[tuple[str, str]] = []
+_LAST_CHART_SPECS: list[dict[str, object]] = []
 
 
 class PersonalStatsApp:
@@ -47,6 +48,26 @@ class PersonalStatsApp:
         self.person_metric_cards: dict[str, object] = {}
         self.chart_output_container = None
         self.chart_specs: list[dict[str, object]] = []
+        self.people_choices: dict[str, str] = {}
+
+    def _entry_table_columns(self, person_choices: dict[str, str]) -> list[dict[str, str]]:
+        columns = [
+            {"name": "entry_id", "label": "Entry\nID", "field": "entry_id"},
+            {"name": "date", "label": "Date", "field": "date"},
+            {"name": "duration", "label": "Duration\n(min)", "field": "duration"},
+            {"name": "rating", "label": "Rating", "field": "rating"},
+            {"name": "partners", "label": "People\nInvolved", "field": "partners"},
+            {"name": "positions", "label": "Positions", "field": "positions"},
+            {"name": "places", "label": "Places", "field": "places"},
+        ]
+        for pid, name in sorted(person_choices.items(), key=lambda item: item[1].lower()):
+            key = f"person_orgasms__{pid}"
+            columns.insert(4, {"name": key, "label": f"{name}\nOrgasms", "field": key})
+        return columns
+
+    def _apply_chart_spec_cache(self) -> None:
+        global _LAST_CHART_SPECS
+        _LAST_CHART_SPECS = [dict(s) for s in self.chart_specs]
 
     def _display_date(self, value: str | None) -> str:
         if not value:
@@ -79,8 +100,9 @@ class PersonalStatsApp:
         return subtitle
 
     def build(self) -> None:
-        global _LAST_MILESTONES
+        global _LAST_MILESTONES, _LAST_CHART_SPECS
         self.milestones = list(_LAST_MILESTONES)
+        self.chart_specs = [dict(s) for s in _LAST_CHART_SPECS]
 
         ui.label("Personal Stats Webapp").classes("text-2xl font-bold")
         ui.label("Read-only browser + interactive charting for immutable export DB")
@@ -102,6 +124,7 @@ class PersonalStatsApp:
         try:
             partner_choices |= {str(pid): name for pid, name in self.service.people_options()}
             person_choices = dict(partner_choices)
+            self.people_choices = dict(person_choices)
             position_choices = {pid: name for pid, name in self.service.position_options()}
             place_choices |= {str(pid): name for pid, name in self.service.place_options()}
         except DataSourceError as exc:
@@ -215,17 +238,7 @@ class PersonalStatsApp:
         with ui.card().classes("w-full"):
             ui.label("Entries")
             self.table = ui.table(
-                columns=[
-                    {"name": "entry_id", "label": "Entry ID", "field": "entry_id"},
-                    {"name": "date", "label": "Date", "field": "date"},
-                    {"name": "duration", "label": "Duration", "field": "duration"},
-                    {"name": "rating", "label": "Rating", "field": "rating"},
-                    {"name": "total_org", "label": "Reporter Orgasms", "field": "total_org"},
-                    {"name": "total_org_partner", "label": "Other People Orgasms", "field": "total_org_partner"},
-                    {"name": "partners", "label": "People", "field": "partners"},
-                    {"name": "positions", "label": "Positions", "field": "positions"},
-                    {"name": "places", "label": "Places", "field": "places"},
-                ],
+                columns=self._entry_table_columns(person_choices),
                 rows=[],
                 pagination=20,
             ).classes("w-full")
@@ -264,6 +277,8 @@ class PersonalStatsApp:
             chart_people = ui.select(person_choices, label="People", value=[], multiple=True).props("use-chips clearable").classes("w-full")
             include_trend = ui.switch("Include trend line", value=True)
             trend_kind = ui.select({"rolling_30": "30-day rolling mean"}, label="Trend calculation", value="rolling_30").classes("w-full md:w-[20rem]")
+            alias_inputs: dict[int, object] = {}
+            alias_container = ui.column().classes("w-full gap-2")
 
             tip_label = ui.label(chart_tips["orgasms"]).classes("text-sm text-gray-600")
 
@@ -282,14 +297,40 @@ class PersonalStatsApp:
             include_trend.on_value_change(lambda _: update_trend_controls())
             update_trend_controls()
 
+            def render_alias_inputs() -> None:
+                alias_container.clear()
+                alias_inputs.clear()
+                with alias_container:
+                    if chart_type.value != "orgasms":
+                        return
+                    ui.label("Optional display-name overrides (for anonymized charts)").classes("text-sm text-gray-600")
+                    for selected in (chart_people.value or []):
+                        pid = int(selected)
+                        name = person_choices.get(str(pid), str(pid))
+                        alias_inputs[pid] = ui.input(
+                            label=f"Display name for {name}",
+                            placeholder="leave blank to use original name",
+                        ).classes("w-full md:w-[24rem]")
+
+            chart_type.on_value_change(lambda _: render_alias_inputs())
+            chart_people.on_value_change(lambda _: render_alias_inputs())
+            render_alias_inputs()
+
             def add_chart() -> None:
+                aliases = {
+                    int(pid): str(inp.value).strip()
+                    for pid, inp in alias_inputs.items()
+                    if str(inp.value or "").strip()
+                }
                 spec = {
                     "type": chart_type.value,
                     "people": [int(v) for v in (chart_people.value or [])],
                     "include_trend": bool(include_trend.value) if chart_type.value == "orgasms" else False,
                     "trend_kind": trend_kind.value if chart_type.value == "orgasms" else None,
+                    "person_aliases": aliases,
                 }
                 self.chart_specs.append(spec)
+                self._apply_chart_spec_cache()
                 self.render_chart_specs(current_filters(), person_choices)
                 self._set_status("Added chart.")
 
@@ -313,6 +354,7 @@ class PersonalStatsApp:
         place.update()
         self._render_milestone_list()
         self.refresh_all(initial_filters)
+        self.render_chart_specs(initial_filters, person_choices)
 
     def _normalize_ui_date(self, value) -> str | None:
         if not value:
@@ -402,6 +444,16 @@ class PersonalStatsApp:
         try:
             if chart_type == "orgasms":
                 df = self.service.orgasms_by_person_timeseries(filters, people_ids)
+                aliases = spec.get("person_aliases") if isinstance(spec.get("person_aliases"), dict) else {}
+                if not df.empty and aliases:
+                    rename_map = {
+                        person_choices.get(str(pid), str(pid)): alias
+                        for pid, alias in aliases.items()
+                        if str(alias).strip()
+                    }
+                    if rename_map:
+                        df = df.copy()
+                        df["person"] = df["person"].apply(lambda p: rename_map.get(str(p), str(p)))
                 subtitle = self._chart_subtitle("Orgasms per session", filters, people_ids, person_choices)
                 return partner_orgasms_chart(
                     df,
@@ -504,8 +556,13 @@ class PersonalStatsApp:
     def refresh_entries(self, filters: SearchFilters) -> None:
         try:
             rows = self.service.search_entries(filters)
+            for row in rows:
+                orgasms = row.get("person_orgasms") if isinstance(row.get("person_orgasms"), dict) else {}
+                for pid, name in self.people_choices.items():
+                    row[f"person_orgasms__{pid}"] = int(orgasms.get(name, 0))
             self.table.rows = rows
             self.table.update()
+            self.table.props("table-header-style='white-space: pre-line;'")
             self._set_status(f"Loaded {len(rows)} row(s).")
         except DataSourceError as exc:
             self.table.rows = []
@@ -535,16 +592,17 @@ class PersonalStatsApp:
                 ui.label(str(row.get("duration") or ""))
                 ui.label("Rating:")
                 ui.label(str(row.get("rating") or ""))
-                ui.label("Reporter Orgasms:")
-                ui.label(str(row.get("total_org") or 0))
-                ui.label("Other People Orgasms:")
-                ui.label(str(row.get("total_org_partner") or 0))
                 ui.label("People:")
                 ui.label(str(row.get("partners") or ""))
                 ui.label("Positions:")
                 ui.label(str(row.get("positions") or ""))
                 ui.label("Places:")
                 ui.label(str(row.get("places") or ""))
+            ui.separator()
+            ui.label("Orgasms by person").classes("font-medium")
+            orgasms = row.get("person_orgasms") if isinstance(row.get("person_orgasms"), dict) else {}
+            for person, count in sorted(orgasms.items(), key=lambda item: item[0].lower()):
+                ui.label(f"{person}: {int(count)}")
             ui.separator()
             ui.label("Description").classes("font-medium")
             ui.markdown(str(row.get("note") or "(No description)"))

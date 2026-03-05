@@ -219,7 +219,15 @@ class StatsService:
                     position_ids = self._position_ids_for_entry(cur, int(entry_id))
                     place_ids = self._place_ids_for_entry(cur, int(entry_id))
 
-                    entry["partners"] = ", ".join(partner_map.get(i, f"Unknown({i})") for i in partner_ids)
+                    reporter_name = partner_map.get(int(entry.get("reporter_person_id") or 0))
+                    people_involved: list[str] = []
+                    if reporter_name:
+                        people_involved.append(reporter_name)
+                    for i in partner_ids:
+                        partner_name = partner_map.get(i, f"Unknown({i})")
+                        if partner_name not in people_involved:
+                            people_involved.append(partner_name)
+                    entry["partners"] = ", ".join(people_involved)
                     entry["positions"] = ", ".join(position_map.get(i, f"Unknown({i})") for i in position_ids)
                     entry["places"] = ", ".join(PLACE_MAPPING.get(i, f"Unknown({i})") for i in place_ids)
                     entry["person_orgasms"] = self._row_person_orgasms(cur, entry, partner_map)
