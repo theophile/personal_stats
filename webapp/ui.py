@@ -57,7 +57,7 @@ class PersonalStatsApp:
             {"name": "duration", "label": "Duration\n(min)", "field": "duration"},
             {"name": "rating", "label": "Rating", "field": "rating"},
             {"name": "partners", "label": "People\nInvolved", "field": "partners"},
-            {"name": "positions", "label": "Positions", "field": "positions"},
+            {"name": "positions", "label": "Positions", "field": "positions", 'classes': 'min-w-[200px] max-w-[400px]', 'style': 'white-space: normal; word-break: break-word;'},
             {"name": "places", "label": "Places", "field": "places"},
         ]
         for pid, name in sorted(person_choices.items(), key=lambda item: item[1].lower()):
@@ -86,13 +86,22 @@ class PersonalStatsApp:
         filters: SearchFilters,
         people_ids: list[int],
         person_choices: dict[str, str],
+        aliases: dict[int, str] | None = None, # Add aliases parameter
     ) -> str:
         start = self._display_date(filters.start_date)
         end = self._display_date(filters.end_date)
         subtitle = f"{chart_label} from {start} to {end}"
+
         if people_ids:
-            people = ", ".join(person_choices.get(str(pid), str(pid)) for pid in people_ids)
+            names = []
+            for pid in people_ids:
+                # Use alias if provided, otherwise fallback to choice name, then ID
+                display_name = (aliases or {}).get(pid) or person_choices.get(str(pid), str(pid))
+                names.append(display_name)
+
+            people = ", ".join(names)
             subtitle += f" for sessions involving: {people}"
+
         if filters.position_ids:
             position_map = dict(self.service.position_options())
             positions = ", ".join(position_map.get(int(pid), str(pid)) for pid in filters.position_ids)
@@ -242,6 +251,14 @@ class PersonalStatsApp:
                 rows=[],
                 pagination=20,
             ).classes("w-full")
+            self.table.add_slot('header', r'''
+                <q-tr :props="props">
+                    <q-th v-for="col in props.cols" :key="col.name" :props="props">
+                        <div v-html="col.label" style="line-height: 1.2; white-space: normal; text-align: center; width: 100%;"></div>
+                    </q-th>
+                </q-tr>
+            ''')
+
             self.table.on("rowClick", self.show_entry_dialog)
 
         chart_types = {
@@ -301,8 +318,8 @@ class PersonalStatsApp:
                 alias_container.clear()
                 alias_inputs.clear()
                 with alias_container:
-                    if chart_type.value != "orgasms":
-                        return
+                    #if chart_type.value != "orgasms":
+                    #    return
                     ui.label("Optional display-name overrides (for anonymized charts)").classes("text-sm text-gray-600")
                     for selected in (chart_people.value or []):
                         pid = int(selected)
@@ -441,80 +458,101 @@ class PersonalStatsApp:
     def _build_chart(self, filters: SearchFilters, spec: dict[str, object], person_choices: dict[str, str]) -> Figure:
         chart_type = spec.get("type")
         people_ids = [int(v) for v in (spec.get("people") or [])]
+        aliases = spec.get("person_aliases") if isinstance(spec.get("person_aliases"), dict) else {}
+        rename_map = {
+            person_choices.get(str(pid), str(pid)): alias
+            for pid, alias in aliases.items()
+            if str(alias).strip()
+        }
+
+        def apply_aliases(df, col_name="person"):
+            """Helper to swap real names for pseudonyms in a dataframe."""
+            if df.empty or not rename_map:
+                return df
+            df = df.copy()
+            if col_name in df.columns:
+                df[col_name] = df[col_name].apply(lambda x: rename_map.get(str(x), str(x)))
+            return df
+
         try:
             if chart_type == "orgasms":
                 df = self.service.orgasms_by_person_timeseries(filters, people_ids)
-                aliases = spec.get("person_aliases") if isinstance(spec.get("person_aliases"), dict) else {}
-                if not df.empty and aliases:
-                    rename_map = {
-                        person_choices.get(str(pid), str(pid)): alias
-                        for pid, alias in aliases.items()
-                        if str(alias).strip()
-                    }
-                    if rename_map:
-                        df = df.copy()
-                        df["person"] = df["person"].apply(lambda p: rename_map.get(str(p), str(p)))
-                subtitle = self._chart_subtitle("Orgasms per session", filters, people_ids, person_choices)
+                df = apply_aliases(df)
+                subtitle = self._chart_subtitle("Orgasms per session", filters, people_ids, person_choices, aliases)
                 return partner_orgasms_chart(
                     df,
                     milestones=self.milestones,
                     include_trend=bool(spec.get("include_trend", True)),
                     subtitle=subtitle,
                 )
+
             if chart_type == "ratings":
-                subtitle = self._chart_subtitle("Rating distribution", filters, people_ids, person_choices)
+                subtitle = self._chart_subtitle("Rating distribution", filters, people_ids, person_choices, aliases)
                 return rating_histogram_chart(self.service.ratings_dataframe(filters), subtitle=subtitle)
+
             if chart_type == "duration":
-                subtitle = self._chart_subtitle("Session duration", filters, people_ids, person_choices)
-                return duration_violin_chart(self.service.duration_by_partner_dataframe(filters), subtitle=subtitle)
+                df = self.service.duration_by_partner_dataframe(filters)
+                df = apply_aliases(df, col_name="partners")
+                subtitle = self._chart_subtitle("Session duration", filters, people_ids, person_choices, aliases)
+                return duration_violin_chart(df, subtitle=subtitle)
+
             if chart_type == "anomaly":
-                subtitle = self._chart_subtitle("Orgasm anomaly detection", filters, people_ids, person_choices)
+                df = self.service.partner_orgasms_anomaly_dataframe(filters)
+                df = apply_aliases(df)
+                subtitle = self._chart_subtitle("Orgasm anomaly detection", filters, people_ids, person_choices, aliases)
                 return rolling_anomaly_chart(
-                    self.service.partner_orgasms_anomaly_dataframe(filters),
+                    df,
                     milestones=self.milestones,
                     subtitle=subtitle,
                 )
+
             if chart_type == "streaks":
-                subtitle = self._chart_subtitle("Sex streaks", filters, people_ids, person_choices)
+                subtitle = self._chart_subtitle("Sex streaks", filters, people_ids, person_choices, aliases)
                 return sex_streaks_chart(
                     self.service.sex_streaks_dataframe(filters),
                     milestones=self.milestones,
                     subtitle=subtitle,
                 )
+
             if chart_type == "position_frequency":
-                subtitle = self._chart_subtitle("Position frequency", filters, people_ids, person_choices)
+                subtitle = self._chart_subtitle("Position frequency", filters, people_ids, person_choices, aliases)
                 return position_frequency_chart(
                     self.service.position_frequency_dataframe(filters, require_people=people_ids),
                     subtitle=subtitle,
                 )
+
             if chart_type == "position_combos":
-                subtitle = self._chart_subtitle("Position combinations", filters, people_ids, person_choices)
+                subtitle = self._chart_subtitle("Position combinations", filters, people_ids, person_choices, aliases)
                 return position_combinations_chart(
                     self.service.position_combinations_dataframe(filters, require_people=people_ids),
                     subtitle=subtitle,
                 )
+
             if chart_type == "position_association":
-                subtitle = self._chart_subtitle("Position association rules", filters, people_ids, person_choices)
+                subtitle = self._chart_subtitle("Position association rules", filters, people_ids, person_choices, aliases)
                 return position_association_chart(
                     self.service.position_association_rules_dataframe(filters, require_people=people_ids),
                     subtitle=subtitle,
                 )
+
             if chart_type == "position_upset":
-                subtitle = self._chart_subtitle("Position UpSet", filters, people_ids, person_choices)
+                subtitle = self._chart_subtitle("Position UpSet", filters, people_ids, person_choices, aliases)
                 return position_upset_chart(
                     self.service.position_upset_dataframe(filters, require_people=people_ids),
                     filters.start_date,
                     filters.end_date,
                     subtitle=subtitle,
                 )
+
             if chart_type == "location_room":
-                subtitle = self._chart_subtitle("Location/Room links", filters, people_ids, person_choices)
+                subtitle = self._chart_subtitle("Location/Room links", filters, people_ids, person_choices, aliases)
                 return location_room_sankey_chart(
                     self.service.location_room_sankey_dataframe(filters),
                     subtitle=subtitle,
                 )
         except Exception as exc:
             self._set_status(f"Chart build failed: {exc}")
+
         fig = Figure()
         fig.update_layout(title="Chart unavailable")
         return fig
@@ -602,7 +640,8 @@ class PersonalStatsApp:
             ui.label("Orgasms by person").classes("font-medium")
             orgasms = row.get("person_orgasms") if isinstance(row.get("person_orgasms"), dict) else {}
             for person, count in sorted(orgasms.items(), key=lambda item: item[0].lower()):
-                ui.label(f"{person}: {int(count)}")
+                if person in row.get("partners"):
+                    ui.label(f"{person}: {int(count)}")
             ui.separator()
             ui.label("Description").classes("font-medium")
             ui.markdown(str(row.get("note") or "(No description)"))
