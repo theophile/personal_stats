@@ -292,7 +292,7 @@ class PersonalStatsApp:
                 ui.tooltip("Select a chart type to configure and add.")
             chart_people = ui.select(person_choices, label="People", value=[], multiple=True).props("use-chips clearable").classes("w-full")
             include_trend = ui.switch("Include trend line", value=True)
-            trend_kind = ui.select({"rolling_30": "30-day rolling mean"}, label="Trend calculation", value="rolling_30").classes("w-full md:w-[20rem]")
+            trend_kind = ui.select({"rolling_30": "30-day rolling mean", "loess": "LOESS"}, label="Trend calculation", value="rolling_30").classes("w-full md:w-[20rem]")
             alias_inputs: dict[int, object] = {}
             alias_container = ui.column().classes("w-full gap-2")
 
@@ -519,6 +519,7 @@ class PersonalStatsApp:
         chart_type_val = spec.get("type")
         people_ids = [int(v) for v in (spec.get("people") or [])]
         aliases = spec.get("person_aliases") if isinstance(spec.get("person_aliases"), dict) else {}
+        trend_kind_val = str(spec.get("trend_kind") or "rolling_30")
         rename_map = {
             person_choices.get(str(pid), str(pid)): alias
             for pid, alias in aliases.items()
@@ -551,20 +552,28 @@ class PersonalStatsApp:
                             position_ids=filters.position_ids,
                             place_id=filters.place_id,
                         )
-                        df = self.service.orgasms_by_person_timeseries(ds_filters, people_ids)
+                        df = self.service.orgasms_by_person_timeseries(ds_filters, people_ids, trend_kind=trend_kind_val)
                         df = apply_aliases(df)
                         if df.empty:
                             continue
                         if normalize_year:
                             # Normalize to 1904 (a leap year) so Feb 29 is valid.
                             df = df.copy()
-                            df["date"] = df["date"].apply(
-                                lambda d: d.replace(year=1904)
-                            )
+                            df["date"] = df["date"].apply(lambda d: d.replace(year=1904))
                             df = df.sort_values(["person", "date"])
-                            df["trend"] = df.groupby("person")["orgasms"].transform(
-                                lambda s: s.rolling(window=30, min_periods=1).mean()
-                            )
+                            if trend_kind_val == "loess":
+                                from webapp.services import _loess_smooth
+                                df["trend"] = df.groupby("person", group_keys=False).apply(
+                                    lambda g: _loess_smooth(
+                                        pd.Series(range(len(g)), index=g.index),
+                                        g["orgasms"],
+                                        frac=0.3,
+                                    )
+                                )
+                            else:
+                                df["trend"] = df.groupby("person")["orgasms"].transform(
+                                    lambda s: s.rolling(window=30, min_periods=1).mean()
+                                )
                         df["person"] = ds["label"] + " — " + df["person"]
                         frames.append(df)
 
@@ -577,7 +586,7 @@ class PersonalStatsApp:
                         ]
                         subtitle += " for: " + ", ".join(names)
                 else:
-                    combined = self.service.orgasms_by_person_timeseries(filters, people_ids)
+                    combined = self.service.orgasms_by_person_timeseries(filters, people_ids, trend_kind=trend_kind_val)
                     combined = apply_aliases(combined)
                     subtitle = self._chart_subtitle("Orgasms per session", filters, people_ids, person_choices, aliases)
 
@@ -585,6 +594,7 @@ class PersonalStatsApp:
                     combined,
                     milestones=self.milestones,
                     include_trend=bool(spec.get("include_trend", True)),
+                    trend_kind=trend_kind_val,
                     subtitle=subtitle,
                     normalize_year=normalize_year,
                 )

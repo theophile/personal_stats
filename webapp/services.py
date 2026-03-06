@@ -16,6 +16,45 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in dependency-limite
 from webapp.db import ReadOnlyDatabase
 
 
+def _loess_smooth(x: "pd.Series", y: "pd.Series", frac: float = 0.3) -> "pd.Series":
+    """1-D LOESS smoother using tricubic weights and local linear regression.
+
+    Parameters
+    ----------
+    x : numeric Series (e.g. ordinal index 0..n-1)
+    y : value Series
+    frac : fraction of data used for each local fit (bandwidth)
+    """
+    import numpy as np
+
+    x_arr = x.to_numpy(dtype=float)
+    y_arr = y.to_numpy(dtype=float)
+    n = len(x_arr)
+    smoothed = np.empty(n)
+    half_window = max(int(np.ceil(frac * n)), 2)
+
+    for i in range(n):
+        dists = np.abs(x_arr - x_arr[i])
+        idx = np.argsort(dists)[:half_window]
+        h = dists[idx[-1]] or 1.0
+
+        u = dists[idx] / h
+        w = (1.0 - u ** 3) ** 3
+
+        xi = x_arr[idx]
+        yi = y_arr[idx]
+        W = np.diag(w)
+        X = np.column_stack([np.ones(len(xi)), xi])
+        try:
+            XtW = X.T @ W
+            coef = np.linalg.solve(XtW @ X, XtW @ yi)
+            smoothed[i] = coef[0] + coef[1] * x_arr[i]
+        except np.linalg.LinAlgError:
+            smoothed[i] = np.average(yi, weights=w)
+
+    return pd.Series(smoothed, index=y.index)
+
+
 PLACE_MAPPING = {
     0: "Bedroom",
     1: "Kitchen",
@@ -307,7 +346,7 @@ class StatsService:
 
         return out
 
-    def orgasms_by_person_timeseries(self, filters: SearchFilters, person_ids: list[int] | None = None):
+    def orgasms_by_person_timeseries(self, filters: SearchFilters, person_ids: list[int] | None = None, trend_kind: str = "rolling_30"):
         self._require_pandas()
         rows = self.search_entries(filters, limit=100000)
         people_map = self.person_name_map()
@@ -335,7 +374,18 @@ class StatsService:
 
         daily = df.groupby(["date", "person"], as_index=False)["orgasms"].sum()
         daily = daily.sort_values(["person", "date"])
-        daily["trend"] = daily.groupby("person")["orgasms"].transform(lambda s: s.rolling(window=30, min_periods=1).mean())
+        if trend_kind == "loess":
+            # Apply LOESS per person; use transform-style assignment via a dict
+            # to guarantee a Series (not DataFrame) is assigned to the column.
+            trend_parts = {}
+            for person, group in daily.groupby("person"):
+                x = pd.Series(range(len(group)), index=group.index)
+                trend_parts[person] = _loess_smooth(x, group["orgasms"], frac=0.3)
+            daily["trend"] = pd.concat(trend_parts.values())
+        else:
+            daily["trend"] = daily.groupby("person")["orgasms"].transform(
+                lambda s: s.rolling(window=30, min_periods=1).mean()
+            )
         return daily
 
     def partner_orgasms_timeseries(self, filters: SearchFilters):
