@@ -776,6 +776,127 @@ class StatsService:
             },
         }
 
+    def year_in_review(self, filters: SearchFilters, person_ids: list[int] | None = None) -> dict:
+        """Compute stats for the Rendezvous Report card."""
+        if person_ids:
+            entry_ids = set(self._entry_ids_for_all_people(filters, person_ids))
+            rows = [r for r in self.search_entries(filters, limit=100000)
+                    if int(r.get("entry_id") or 0) in entry_ids]
+        else:
+            rows = self.search_entries(filters, limit=100000)
+
+        if not rows:
+            return {}
+
+        # ── Dates ─────────────────────────────────────────────────────────────
+        dates = []
+        for r in rows:
+            try:
+                dates.append(pd.to_datetime(str(r.get("date")), format="%Y.%m.%d"))
+            except Exception:
+                pass
+        dates.sort()
+        date_min = dates[0].strftime("%b %-d, %Y") if dates else None
+        date_max = dates[-1].strftime("%b %-d, %Y") if dates else None
+        n_sessions = len(rows)
+        span_days = (dates[-1] - dates[0]).days + 1 if len(dates) >= 2 else 0
+        sessions_per_week = round(n_sessions / (span_days / 7), 1) if span_days > 0 else 0.0
+
+        # ── Duration ──────────────────────────────────────────────────────────
+        durations = [int(r.get("duration") or 0) for r in rows if r.get("duration")]
+        total_minutes = sum(durations)
+        avg_minutes = round(total_minutes / len(durations)) if durations else 0
+
+        # ── Orgasms — only for selected people (or all if none selected) ───────
+        person_map = self.person_name_map()
+        if person_ids:
+            selected_names = {person_map[pid] for pid in person_ids if pid in person_map}
+        else:
+            selected_names = set(person_map.values())
+
+        by_person_total: Counter[str] = Counter()
+        by_person_max: Counter[str] = Counter()
+        for row in rows:
+            orgasms = row.get("person_orgasms") or {}
+            if isinstance(orgasms, dict):
+                for person, count in orgasms.items():
+                    if str(person) not in selected_names:
+                        continue
+                    c = int(count or 0)
+                    by_person_total[str(person)] += c
+                    if c > by_person_max[str(person)]:
+                        by_person_max[str(person)] = c
+        by_person_avg = {
+            name: round(by_person_total[name] / n_sessions, 2)
+            for name in by_person_total
+        }
+
+        # ── Positions ─────────────────────────────────────────────────────────
+        position_counter: Counter[str] = Counter()
+        combo_counter: Counter[str] = Counter()
+        for row in rows:
+            positions = sorted([p.strip() for p in str(row.get("positions") or "").split(",") if p.strip()])
+            for pos in positions:
+                position_counter[pos] += 1
+            if positions:
+                combo_counter[" + ".join(positions)] += 1
+        n_distinct_positions = len(position_counter)
+        n_distinct_combos = len(combo_counter)
+        top_position, top_position_count = (position_counter.most_common(1)[0] if position_counter else (None, 0))
+
+        # ── Places ────────────────────────────────────────────────────────────
+        place_counter: Counter[str] = Counter()
+        for row in rows:
+            for pl in [p.strip() for p in str(row.get("places") or "").split(",") if p.strip()]:
+                place_counter[pl] += 1
+        top_place, top_place_count = (place_counter.most_common(1)[0] if place_counter else (None, 0))
+
+        # ── Streaks ───────────────────────────────────────────────────────────
+        streaks_df = self.sex_streaks_dataframe(filters)
+        longest_sex_streak = 0
+        longest_no_sex_streak = 0
+        if not streaks_df.empty:
+            sex_rows_df = streaks_df[streaks_df["type"] == "sex"]
+            no_sex_rows_df = streaks_df[streaks_df["type"] == "no_sex"]
+            longest_sex_streak = int(sex_rows_df["length"].max()) if not sex_rows_df.empty else 0
+            longest_no_sex_streak = int(no_sex_rows_df["length"].max()) if not no_sex_rows_df.empty else 0
+
+        # ── Day of week & month ───────────────────────────────────────────────
+        dow_counter: Counter[str] = Counter()
+        month_counter: Counter[str] = Counter()
+        for d in dates:
+            dow_counter[d.strftime("%A")] += 1
+            month_counter[d.strftime("%B")] += 1
+        top_dow, top_dow_count = (dow_counter.most_common(1)[0] if dow_counter else (None, 0))
+        top_month, top_month_count = (month_counter.most_common(1)[0] if month_counter else (None, 0))
+        least_month, least_month_count = (month_counter.most_common()[-1] if len(month_counter) > 1 else (None, 0))
+
+        return {
+            "date_min": date_min,
+            "date_max": date_max,
+            "n_sessions": n_sessions,
+            "sessions_per_week": sessions_per_week,
+            "total_minutes": total_minutes,
+            "avg_minutes": avg_minutes,
+            "orgasms_by_person_total": dict(by_person_total),
+            "orgasms_by_person_avg": by_person_avg,
+            "orgasms_by_person_max": dict(by_person_max),
+            "n_distinct_positions": n_distinct_positions,
+            "n_distinct_combos": n_distinct_combos,
+            "top_position": top_position,
+            "top_position_count": top_position_count,
+            "top_place": top_place,
+            "top_place_count": top_place_count,
+            "longest_sex_streak": longest_sex_streak,
+            "longest_no_sex_streak": longest_no_sex_streak,
+            "top_day_of_week": top_dow,
+            "top_day_of_week_count": top_dow_count,
+            "top_month": top_month,
+            "top_month_count": top_month_count,
+            "least_month": least_month,
+            "least_month_count": least_month_count,
+        }
+
     def export_report_json(self, filters: SearchFilters) -> Path:
         report = self.build_report(filters)
         path = self.temp_export_path("report_export_", ".json")

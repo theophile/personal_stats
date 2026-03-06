@@ -7,6 +7,7 @@ from nicegui import ui
 from plotly.graph_objs import Figure
 from webapp.charts import (
     location_room_sankey_chart,
+    year_in_review_chart,
     duration_violin_chart,
     partner_orgasms_chart,
     position_association_chart,
@@ -271,6 +272,7 @@ class PersonalStatsApp:
             "position_association": "Position Association Rules",
             "position_upset": "Position UpSet",
             "location_room": "Location/Room Links",
+            "year_in_review": "Rendezvous Report",
         }
         chart_tips = {
             "orgasms": "Time series of orgasms per selected person.",
@@ -283,6 +285,7 @@ class PersonalStatsApp:
             "position_association": "Association rules for positions.",
             "position_upset": "Set-intersection view of top positions.",
             "location_room": "Location-to-room co-occurrence links.",
+            "year_in_review": "A card-style stats overview. Select people to filter to sessions involving all of them.",
         }
 
         with ui.card().classes("w-full"):
@@ -387,6 +390,22 @@ class PersonalStatsApp:
 
             render_dataset_section()
 
+            # Custom title for Rendezvous Report
+            report_title_section = ui.column().classes("w-full gap-2")
+
+            def render_report_title_section() -> None:
+                report_title_section.set_visibility(chart_type.value == "year_in_review")
+
+            chart_type.on_value_change(lambda _: render_report_title_section())
+
+            with report_title_section:
+                report_custom_title = ui.input(
+                    "Custom report title",
+                    placeholder="leave blank for default  ✦ Rendezvous Report ✦",
+                ).classes("w-full md:w-[32rem]")
+
+            render_report_title_section()
+
             def add_chart() -> None:
                 aliases = {
                     int(pid): str(inp.value).strip()
@@ -400,6 +419,7 @@ class PersonalStatsApp:
                     "trend_kind": trend_kind.value if chart_type.value == "orgasms" else None,
                     "person_aliases": aliases,
                     "datasets": [dict(d) for d in datasets] if datasets else [],
+                    "custom_title": str(report_custom_title.value or "").strip() if chart_type.value == "year_in_review" else None,
                 }
                 self.chart_specs.append(spec)
                 self._apply_chart_spec_cache()
@@ -502,6 +522,7 @@ class PersonalStatsApp:
                         "position_association": "Position Association Rules",
                         "position_upset": "Position UpSet",
                         "location_room": "Location/Room Links",
+                        "year_in_review": "Rendezvous Report",
                     }.get(str(spec.get("type")), str(spec.get("type")))
                     ui.label(f"Chart {index}: {title}").classes("text-lg")
                     people_ids = spec.get("people", []) or []
@@ -662,6 +683,17 @@ class PersonalStatsApp:
                 return location_room_sankey_chart(
                     self.service.location_room_sankey_dataframe(filters),
                     subtitle=subtitle,
+                )
+
+            if chart_type_val == "year_in_review":
+                subtitle = self._chart_subtitle("Rendezvous Report", filters, people_ids, person_choices, aliases)
+                stats = self.service.year_in_review(filters, person_ids=people_ids or None)
+                custom_title = str(spec.get("custom_title") or "").strip() or None
+                return year_in_review_chart(
+                    stats,
+                    subtitle=subtitle,
+                    custom_title=custom_title,
+                    rename_map=rename_map,
                 )
         except Exception as exc:
             import traceback, sys
