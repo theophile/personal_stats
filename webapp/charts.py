@@ -19,6 +19,9 @@ def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = N
     if not milestones:
         return
 
+    # Labels are rotated 90° and anchored just inside the top of their vertical
+    # line, so each label is unambiguously paired with its own line and cannot
+    # collide with siblings or the title/subtitle block above.
     for date, label in milestones:
         try:
             x_value = pd.to_datetime(date).to_pydatetime()
@@ -37,13 +40,14 @@ def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = N
         )
         fig.add_annotation(
             x=x_value,
-            y=1,
+            y=0.98,
             xref="x",
             yref="paper",
             text=label,
             showarrow=False,
-            xanchor="left",
-            yanchor="bottom",
+            xanchor="right",
+            yanchor="top",
+            textangle=-90,
             font={"size": 11, "color": "darkgreen"},
             bgcolor="rgba(255,255,255,0.75)",
         )
