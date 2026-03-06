@@ -19,14 +19,17 @@ def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = N
     if not milestones:
         return
 
-    # Labels are rotated 90° and anchored just inside the top of their vertical
-    # line, so each label is unambiguously paired with its own line and cannot
-    # collide with siblings or the title/subtitle block above.
-    for date, label in milestones:
+    # Three stagger levels, each stepping down from the top of the plot area
+    # so labels stay inside the chart and well clear of the title/subtitle block.
+    y_levels = [0.97, 0.88, 0.79]
+
+    for i, (date, label) in enumerate(milestones):
         try:
             x_value = pd.to_datetime(date).to_pydatetime()
         except (TypeError, ValueError):
             continue
+
+        y_top = y_levels[i % len(y_levels)]
 
         fig.add_shape(
             type="line",
@@ -34,20 +37,19 @@ def _add_milestones(fig: go.Figure, milestones: list[tuple[str, str]] | None = N
             x1=x_value,
             xref="x",
             y0=0,
-            y1=1,
+            y1=y_top,
             yref="paper",
             line={"width": 2, "dash": "dot", "color": "darkgreen"},
         )
         fig.add_annotation(
             x=x_value,
-            y=0.98,
+            y=y_top,
             xref="x",
             yref="paper",
             text=label,
             showarrow=False,
-            xanchor="right",
-            yanchor="top",
-            textangle=-90,
+            xanchor="left",
+            yanchor="bottom",
             font={"size": 11, "color": "darkgreen"},
             bgcolor="rgba(255,255,255,0.75)",
         )
@@ -59,11 +61,13 @@ def partner_orgasms_chart(
     include_trend: bool = True,
     title: str = "Orgasms Over Time",
     subtitle: str | None = None,
+    normalize_year: bool = False,
 ) -> go.Figure:
     fig = go.Figure()
     if df.empty:
         fig.update_layout(title=_title_with_subtitle(f"{title} (no results)", subtitle))
-        _add_milestones(fig, milestones)
+        if not normalize_year:
+            _add_milestones(fig, milestones)
         return fig
 
     people = df["person"].unique().tolist() if "person" in df.columns else ["Daily"]
@@ -90,15 +94,19 @@ def partner_orgasms_chart(
             )
     fig.update_layout(
         title=_title_with_subtitle(title, subtitle),
-        xaxis_title="Date",
+        xaxis_title="Date" if not normalize_year else "Month / Day",
         yaxis_title="Orgasms",
         legend_title_text="Series",
         autosize=True,
         height=500,
         margin={"l": 40, "r": 20, "t": 60, "b": 40},
     )
-    fig.update_xaxes(rangeslider={"visible": True})
-    _add_milestones(fig, milestones)
+    if normalize_year:
+        # Show only month and day on the x-axis; hide the dummy year.
+        fig.update_xaxes(tickformat="%b %d")
+    else:
+        fig.update_xaxes(rangeslider={"visible": True})
+        _add_milestones(fig, milestones)
     return fig
 
 

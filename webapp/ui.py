@@ -330,6 +330,63 @@ class PersonalStatsApp:
             chart_people.on_value_change(lambda _: render_alias_inputs())
             render_alias_inputs()
 
+            # --- Dataset overrides (orgasms chart only) ---
+            # Each dataset is a (label, start_date, end_date) triple.  When two
+            # or more datasets are defined their x-axes are normalized to a shared
+            # MM-DD spine so years overlay each other for direct comparison.
+            # With zero or one dataset the chart falls back to normal behaviour.
+            datasets: list[dict[str, str]] = []
+
+            dataset_section = ui.column().classes("w-full gap-2")
+
+            def render_dataset_section() -> None:
+                dataset_section.set_visibility(chart_type.value == "orgasms")
+
+            chart_type.on_value_change(lambda _: render_dataset_section())
+
+            with dataset_section:
+                ui.label("Datasets — add two or more to overlay years on the same axis").classes("text-sm text-gray-600")
+                dataset_rows_container = ui.column().classes("w-full gap-1")
+
+                def refresh_dataset_rows() -> None:
+                    dataset_rows_container.clear()
+                    with dataset_rows_container:
+                        for ds in datasets:
+                            with ui.row().classes("w-full items-center gap-2 flex-wrap"):
+                                ui.label(ds["label"]).classes("font-mono text-sm w-[8rem]")
+                                ui.label(f"{ds['start_date']} → {ds['end_date']}").classes("text-sm text-gray-600")
+                                def make_remove(d=ds):
+                                    def remove():
+                                        datasets.remove(d)
+                                        refresh_dataset_rows()
+                                    return remove
+                                ui.button("✕", on_click=make_remove()).props("flat dense").classes("text-red-500")
+
+                with ui.dialog() as dataset_dialog, ui.card().classes("w-[34rem] max-w-[95vw]"):
+                    ui.label("Add Dataset").classes("text-lg font-semibold")
+                    ds_label = ui.input("Series label", placeholder="e.g., 2024").classes("w-full")
+                    ds_start = ui.date(mask="YYYY-MM-DD").props("label='Start date'").classes("w-full")
+                    ds_end = ui.date(mask="YYYY-MM-DD").props("label='End date'").classes("w-full")
+
+                    def submit_dataset() -> None:
+                        label = str(ds_label.value or "").strip()
+                        start = self._normalize_ui_date(ds_start.value)
+                        end = self._normalize_ui_date(ds_end.value)
+                        if not label or not start or not end:
+                            self._set_status("Dataset label, start date and end date are all required.")
+                            return
+                        datasets.append({"label": label, "start_date": start, "end_date": end})
+                        refresh_dataset_rows()
+                        dataset_dialog.close()
+
+                    with ui.row().classes("w-full justify-end gap-2"):
+                        ui.button("Cancel", on_click=dataset_dialog.close)
+                        ui.button("Add", on_click=submit_dataset)
+
+                ui.button("Add Dataset", on_click=dataset_dialog.open)
+
+            render_dataset_section()
+
             def add_chart() -> None:
                 aliases = {
                     int(pid): str(inp.value).strip()
@@ -342,6 +399,7 @@ class PersonalStatsApp:
                     "include_trend": bool(include_trend.value) if chart_type.value == "orgasms" else False,
                     "trend_kind": trend_kind.value if chart_type.value == "orgasms" else None,
                     "person_aliases": aliases,
+                    "datasets": [dict(d) for d in datasets] if datasets else [],
                 }
                 self.chart_specs.append(spec)
                 self._apply_chart_spec_cache()
@@ -448,12 +506,17 @@ class PersonalStatsApp:
                     ui.label(f"Chart {index}: {title}").classes("text-lg")
                     people_ids = spec.get("people", []) or []
                     people_text = ", ".join(person_choices.get(str(pid), str(pid)) for pid in people_ids) or "All people"
-                    ui.label(f"Parameters: people={people_text}; trend={spec.get('include_trend')}; trend_kind={spec.get('trend_kind')}").classes("text-sm text-gray-600")
+                    datasets_text = (
+                        "; datasets=" + ", ".join(d["label"] for d in spec["datasets"])
+                        if spec.get("datasets")
+                        else ""
+                    )
+                    ui.label(f"Parameters: people={people_text}; trend={spec.get('include_trend')}; trend_kind={spec.get('trend_kind')}{datasets_text}").classes("text-sm text-gray-600")
                     fig = self._build_chart(filters, spec, person_choices)
                     ui.plotly(fig).classes("w-full").style("min-height: 26rem")
 
     def _build_chart(self, filters: SearchFilters, spec: dict[str, object], person_choices: dict[str, str]) -> Figure:
-        chart_type = spec.get("type")
+        chart_type_val = spec.get("type")
         people_ids = [int(v) for v in (spec.get("people") or [])]
         aliases = spec.get("person_aliases") if isinstance(spec.get("person_aliases"), dict) else {}
         rename_map = {
@@ -472,28 +535,71 @@ class PersonalStatsApp:
             return df
 
         try:
-            if chart_type == "orgasms":
-                df = self.service.orgasms_by_person_timeseries(filters, people_ids)
-                df = apply_aliases(df)
-                subtitle = self._chart_subtitle("Orgasms per session", filters, people_ids, person_choices, aliases)
+            if chart_type_val == "orgasms":
+                import pandas as pd
+                spec_datasets = spec.get("datasets") or []
+                normalize_year = len(spec_datasets) >= 2
+
+                if spec_datasets:
+                    frames = []
+                    for ds in spec_datasets:
+                        ds_filters = SearchFilters(
+                            start_date=datetime.strptime(ds["start_date"], "%Y-%m-%d").strftime("%Y.%m.%d"),
+                            end_date=datetime.strptime(ds["end_date"], "%Y-%m-%d").strftime("%Y.%m.%d"),
+                            note_keyword=filters.note_keyword,
+                            person_ids=people_ids or None,
+                            position_ids=filters.position_ids,
+                            place_id=filters.place_id,
+                        )
+                        df = self.service.orgasms_by_person_timeseries(ds_filters, people_ids)
+                        df = apply_aliases(df)
+                        if df.empty:
+                            continue
+                        if normalize_year:
+                            # Normalize to 1904 (a leap year) so Feb 29 is valid.
+                            df = df.copy()
+                            df["date"] = df["date"].apply(
+                                lambda d: d.replace(year=1904)
+                            )
+                            df = df.sort_values(["person", "date"])
+                            df["trend"] = df.groupby("person")["orgasms"].transform(
+                                lambda s: s.rolling(window=30, min_periods=1).mean()
+                            )
+                        df["person"] = ds["label"] + " — " + df["person"]
+                        frames.append(df)
+
+                    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+                    subtitle = "Orgasms per session — " + ", ".join(d["label"] for d in spec_datasets)
+                    if people_ids:
+                        names = [
+                            (aliases or {}).get(pid) or person_choices.get(str(pid), str(pid))
+                            for pid in people_ids
+                        ]
+                        subtitle += " for: " + ", ".join(names)
+                else:
+                    combined = self.service.orgasms_by_person_timeseries(filters, people_ids)
+                    combined = apply_aliases(combined)
+                    subtitle = self._chart_subtitle("Orgasms per session", filters, people_ids, person_choices, aliases)
+
                 return partner_orgasms_chart(
-                    df,
+                    combined,
                     milestones=self.milestones,
                     include_trend=bool(spec.get("include_trend", True)),
                     subtitle=subtitle,
+                    normalize_year=normalize_year,
                 )
 
-            if chart_type == "ratings":
+            if chart_type_val == "ratings":
                 subtitle = self._chart_subtitle("Rating distribution", filters, people_ids, person_choices, aliases)
                 return rating_histogram_chart(self.service.ratings_dataframe(filters), subtitle=subtitle)
 
-            if chart_type == "duration":
+            if chart_type_val == "duration":
                 df = self.service.duration_by_partner_dataframe(filters)
                 df = apply_aliases(df, col_name="partners")
                 subtitle = self._chart_subtitle("Session duration", filters, people_ids, person_choices, aliases)
                 return duration_violin_chart(df, subtitle=subtitle)
 
-            if chart_type == "anomaly":
+            if chart_type_val == "anomaly":
                 df = self.service.partner_orgasms_anomaly_dataframe(filters)
                 df = apply_aliases(df)
                 subtitle = self._chart_subtitle("Orgasm anomaly detection", filters, people_ids, person_choices, aliases)
@@ -503,7 +609,7 @@ class PersonalStatsApp:
                     subtitle=subtitle,
                 )
 
-            if chart_type == "streaks":
+            if chart_type_val == "streaks":
                 subtitle = self._chart_subtitle("Sex streaks", filters, people_ids, person_choices, aliases)
                 return sex_streaks_chart(
                     self.service.sex_streaks_dataframe(filters),
@@ -511,28 +617,28 @@ class PersonalStatsApp:
                     subtitle=subtitle,
                 )
 
-            if chart_type == "position_frequency":
+            if chart_type_val == "position_frequency":
                 subtitle = self._chart_subtitle("Position frequency", filters, people_ids, person_choices, aliases)
                 return position_frequency_chart(
                     self.service.position_frequency_dataframe(filters, require_people=people_ids),
                     subtitle=subtitle,
                 )
 
-            if chart_type == "position_combos":
+            if chart_type_val == "position_combos":
                 subtitle = self._chart_subtitle("Position combinations", filters, people_ids, person_choices, aliases)
                 return position_combinations_chart(
                     self.service.position_combinations_dataframe(filters, require_people=people_ids),
                     subtitle=subtitle,
                 )
 
-            if chart_type == "position_association":
+            if chart_type_val == "position_association":
                 subtitle = self._chart_subtitle("Position association rules", filters, people_ids, person_choices, aliases)
                 return position_association_chart(
                     self.service.position_association_rules_dataframe(filters, require_people=people_ids),
                     subtitle=subtitle,
                 )
 
-            if chart_type == "position_upset":
+            if chart_type_val == "position_upset":
                 subtitle = self._chart_subtitle("Position UpSet", filters, people_ids, person_choices, aliases)
                 return position_upset_chart(
                     self.service.position_upset_dataframe(filters, require_people=people_ids),
@@ -541,13 +647,15 @@ class PersonalStatsApp:
                     subtitle=subtitle,
                 )
 
-            if chart_type == "location_room":
+            if chart_type_val == "location_room":
                 subtitle = self._chart_subtitle("Location/Room links", filters, people_ids, person_choices, aliases)
                 return location_room_sankey_chart(
                     self.service.location_room_sankey_dataframe(filters),
                     subtitle=subtitle,
                 )
         except Exception as exc:
+            import traceback, sys
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
             self._set_status(f"Chart build failed: {exc}")
 
         fig = Figure()
