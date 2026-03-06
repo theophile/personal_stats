@@ -86,7 +86,7 @@ class PersonalStatsApp:
         filters: SearchFilters,
         people_ids: list[int],
         person_choices: dict[str, str],
-        aliases: dict[int, str] | None = None, # Add aliases parameter
+        aliases: dict[int, str] | None = None,
     ) -> str:
         start = self._display_date(filters.start_date)
         end = self._display_date(filters.end_date)
@@ -95,7 +95,6 @@ class PersonalStatsApp:
         if people_ids:
             names = []
             for pid in people_ids:
-                # Use alias if provided, otherwise fallback to choice name, then ID
                 display_name = (aliases or {}).get(pid) or person_choices.get(str(pid), str(pid))
                 names.append(display_name)
 
@@ -318,8 +317,6 @@ class PersonalStatsApp:
                 alias_container.clear()
                 alias_inputs.clear()
                 with alias_container:
-                    #if chart_type.value != "orgasms":
-                    #    return
                     ui.label("Optional display-name overrides (for anonymized charts)").classes("text-sm text-gray-600")
                     for selected in (chart_people.value or []):
                         pid = int(selected)
