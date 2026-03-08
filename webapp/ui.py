@@ -19,7 +19,7 @@ from webapp.charts import (
     sex_streaks_chart,
 )
 from webapp.config import DEFAULT_DB_PATH
-from webapp.services import DataSourceError, SearchFilters, StatsService
+from webapp.services import DataSourceError, SearchFilters, StatsService, SEX_TYPE_MAPPING, INITIATOR_MAPPING
 
 
 _LAST_FILTERS: SearchFilters | None = None
@@ -60,6 +60,7 @@ class PersonalStatsApp:
             {"name": "partners", "label": "People\nInvolved", "field": "partners"},
             {"name": "positions", "label": "Positions", "field": "positions", 'classes': 'min-w-[200px] max-w-[400px]', 'style': 'white-space: normal; word-break: break-word;'},
             {"name": "places", "label": "Places", "field": "places"},
+            {"name": "sex_types", "label": "Sex Types", "field": "sex_types"},
         ]
         for pid, name in sorted(person_choices.items(), key=lambda item: item[1].lower()):
             key = f"person_orgasms__{pid}"
@@ -768,32 +769,198 @@ class PersonalStatsApp:
 
     def show_entry_dialog(self, e) -> None:
         row = self._event_row(e)
-        with ui.dialog() as dialog, ui.card().classes("w-[42rem] max-w-[95vw]"):
-            ui.label(f"Entry #{row.get('entry_id', '')}").classes("text-xl font-semibold")
-            with ui.grid(columns=2).classes("w-full gap-x-6 gap-y-2"):
-                ui.label("Date:")
-                ui.label(str(row.get("date") or ""))
-                ui.label("Duration:")
-                ui.label(str(row.get("duration") or ""))
-                ui.label("Rating:")
-                ui.label(str(row.get("rating") or ""))
-                ui.label("People:")
-                ui.label(str(row.get("partners") or ""))
-                ui.label("Positions:")
-                ui.label(str(row.get("positions") or ""))
-                ui.label("Places:")
-                ui.label(str(row.get("places") or ""))
-            ui.separator()
-            ui.label("Orgasms by person").classes("font-medium")
-            orgasms = row.get("person_orgasms") if isinstance(row.get("person_orgasms"), dict) else {}
-            for person, count in sorted(orgasms.items(), key=lambda item: item[0].lower()):
-                if person in row.get("partners"):
-                    ui.label(f"{person}: {int(count)}")
-            ui.separator()
-            ui.label("Description").classes("font-medium")
-            ui.markdown(str(row.get("note") or "(No description)"))
-            with ui.row().classes("justify-end w-full"):
-                ui.button("Close", on_click=dialog.close)
+        entry_id = int(row.get("entry_id") or 0)
+        if not entry_id:
+            return
+
+        try:
+            raw = self.service.fetch_entry_for_edit(entry_id)
+        except DataSourceError as exc:
+            self._set_status(str(exc))
+            return
+
+        person_map   = dict(self.service.people_options())    # {pid: name}
+        position_map = dict(self.service.position_options())  # {pid: name}
+        place_map    = {pid: name for pid, name in self.service.place_options()}
+
+        reporter_pid  = int(raw.get("reporter_person_id") or 0)
+        reporter_name = person_map.get(reporter_pid, "Me")
+        partner_pids  = raw.get("partner_ids") or []
+        partner_name  = person_map.get(int(partner_pids[0]), "My Partner") if partner_pids else "My Partner"
+
+        initiator_choices = {
+            0: "Spontaneously",
+            1: reporter_name,
+            2: partner_name,
+            3: "Both of Us",
+        }
+
+        with ui.dialog() as dialog, ui.card().classes("w-[52rem] max-w-[98vw] gap-3"):
+            ui.label(f"Edit Entry #{entry_id}").classes("text-xl font-semibold")
+
+            # ── date / duration / rating ──────────────────────────────────
+            raw_date = str(raw.get("date") or "")
+            try:
+                from datetime import datetime as _dt
+                display_date = _dt.strptime(raw_date[:10], "%Y.%m.%d").strftime("%Y-%m-%d")
+            except ValueError:
+                display_date = raw_date
+
+            with ui.row().classes("w-full gap-4 flex-wrap items-start"):
+                date_input     = ui.date(value=display_date, mask="YYYY-MM-DD").props("label='Date'").classes("w-full md:w-[14rem]")
+                duration_input = ui.number("Duration (min)", value=raw.get("duration"), min=0, step=1).classes("w-full md:w-[10rem]")
+                rating_input   = ui.number("Rating (1–5)",   value=raw.get("rating"),   min=1, max=5, step=1).classes("w-full md:w-[9rem]")
+
+            # ── sex types (multi-select) + initiator ──────────────────────
+            with ui.row().classes("w-full gap-4 flex-wrap items-start"):
+                sex_type_select = ui.select(
+                    SEX_TYPE_MAPPING,
+                    label="Sex types",
+                    value=list(raw.get("sex_type_ids") or []),
+                    multiple=True,
+                ).props("use-chips clearable").classes("w-full md:flex-1")
+
+                initiator_val    = raw.get("initiator")
+                initiator_select = ui.select(
+                    initiator_choices,
+                    label="Initiator",
+                    value=int(initiator_val) if initiator_val is not None else None,
+                ).classes("w-full md:w-[16rem]")
+
+            # ── people ────────────────────────────────────────────────────
+            ui.label("People involved").classes("font-medium text-sm mt-2")
+            with ui.row().classes("w-full gap-4 flex-wrap items-start"):
+                people_select = ui.select(
+                    person_map, label="Partners",
+                    value=raw.get("partner_ids") or [],
+                    multiple=True,
+                ).props("use-chips clearable").classes("w-full md:flex-1")
+
+                reporter_select = ui.select(
+                    person_map, label="Reporter",
+                    value=reporter_pid,
+                ).classes("w-full md:w-[14rem]")
+
+            def rebuild_initiator_labels() -> None:
+                rep_pid  = int(reporter_select.value) if reporter_select.value else reporter_pid
+                rep_name = person_map.get(rep_pid, "Me")
+                p_pids   = [int(v) for v in (people_select.value or [])]
+                p_name   = person_map.get(p_pids[0], "My Partner") if p_pids else "My Partner"
+                initiator_select.options = {0: "Spontaneously", 1: rep_name, 2: p_name, 3: "Both of Us"}
+                initiator_select.update()
+
+            reporter_select.on_value_change(lambda _: rebuild_initiator_labels())
+            people_select.on_value_change(lambda _: rebuild_initiator_labels())
+
+            # ── per-partner orgasm counts ─────────────────────────────────
+            ui.label("Orgasms by partner").classes("font-medium text-sm mt-2")
+            orgasm_inputs: dict[int, object] = {}
+            orgasm_container = ui.column().classes("w-full gap-1")
+
+            def render_orgasm_inputs() -> None:
+                orgasm_container.clear()
+                orgasm_inputs.clear()
+                with orgasm_container:
+                    selected_pids = [int(v) for v in (people_select.value or [])]
+                    if not selected_pids:
+                        ui.label("(no partners selected)").classes("text-sm text-gray-400")
+                        return
+                    with ui.row().classes("w-full gap-4 flex-wrap"):
+                        for pid in selected_pids:
+                            name     = person_map.get(pid, str(pid))
+                            existing = (raw.get("partner_orgasms") or {}).get(pid)
+                            orgasm_inputs[pid] = ui.number(label=name, value=existing, min=0, step=1).classes("w-[10rem]")
+
+            people_select.on_value_change(lambda _: render_orgasm_inputs())
+            render_orgasm_inputs()
+
+            with ui.row().classes("w-full gap-4 flex-wrap items-end mt-1"):
+                total_org_input = ui.number(
+                    label=f"{reporter_name} orgasms (reporter)",
+                    value=raw.get("total_org") or 0, min=0, step=1,
+                ).classes("w-[16rem]")
+
+            # ── positions / places ────────────────────────────────────────
+            ui.label("Positions").classes("font-medium text-sm mt-2")
+            positions_select = ui.select(
+                position_map, label="Positions",
+                value=raw.get("position_ids") or [], multiple=True,
+            ).props("use-chips clearable").classes("w-full")
+
+            ui.label("Places").classes("font-medium text-sm mt-2")
+            places_select = ui.select(
+                place_map, label="Places",
+                value=raw.get("place_ids") or [], multiple=True,
+            ).props("use-chips clearable").classes("w-full")
+
+            # ── note ──────────────────────────────────────────────────────
+            ui.label("Note").classes("font-medium text-sm mt-2")
+            note_input = ui.textarea("Description", value=str(raw.get("note") or "")).classes("w-full").props("rows=4")
+
+            # ── save / cancel ─────────────────────────────────────────────
+            save_status = ui.label("").classes("text-sm text-red-500 mt-1")
+
+            async def save_entry() -> None:
+                try:
+                    from datetime import datetime as _dt2
+                    raw_d = str(date_input.value or "").strip()
+                    try:
+                        db_date = _dt2.strptime(raw_d[:10], "%Y-%m-%d").strftime("%Y.%m.%d")
+                    except ValueError:
+                        save_status.set_text("Invalid date — use YYYY-MM-DD.")
+                        return
+
+                    rep_id = int(reporter_select.value) if reporter_select.value else None
+                    if rep_id is None:
+                        save_status.set_text("Reporter is required.")
+                        return
+
+                    dur    = int(duration_input.value) if duration_input.value is not None else None
+                    rat    = int(rating_input.value)   if rating_input.value   is not None else None
+                    init   = int(initiator_select.value) if initiator_select.value is not None else None
+                    t_org  = int(total_org_input.value or 0)
+                    st_ids = [int(v) for v in (sex_type_select.value or [])]
+                    p_ids  = [int(v) for v in (people_select.value   or [])]
+                    pos_ids= [int(v) for v in (positions_select.value or [])]
+                    pl_ids = [int(v) for v in (places_select.value    or [])]
+
+                    p_orgasms: dict[int, int | None] = {}
+                    for pid, inp in orgasm_inputs.items():
+                        p_orgasms[pid] = int(inp.value) if inp.value is not None else None
+
+                    total_partner = sum(v for v in p_orgasms.values() if v is not None)
+
+                    try:
+                        backup_path = self.service.backup_db()
+                        self._set_status(f"Backup saved: {backup_path.name}")
+                    except Exception:
+                        pass
+
+                    self.service.update_entry(
+                        entry_id,
+                        date=db_date, duration=dur, rating=rat,
+                        note=note_input.value or None, initiator=init,
+                        sex_type_ids=st_ids,
+                        total_org=t_org, total_org_partner=total_partner,
+                        reporter_person_id=rep_id,
+                        partner_ids=p_ids, partner_orgasms=p_orgasms,
+                        position_ids=pos_ids, place_ids=pl_ids,
+                    )
+                    dialog.close()
+                    self._set_status(f"Entry #{entry_id} saved.")
+                    global _LAST_FILTERS
+                    self.refresh_entries(_LAST_FILTERS or SearchFilters())
+                except DataSourceError as exc:
+                    save_status.set_text(str(exc))
+                except Exception as exc:
+                    import traceback, sys
+                    print(traceback.format_exc(), file=sys.stderr)
+                    save_status.set_text(f"Unexpected error: {exc}")
+
+            with ui.row().classes("justify-end w-full gap-2 mt-2"):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+                ui.button("Save Changes", on_click=save_entry).props("color=primary")
+
         dialog.open()
 
     def refresh_charts(self, filters: SearchFilters) -> None:

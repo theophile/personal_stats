@@ -29,6 +29,7 @@ class SourceEntryRecord:
     partner_ids: tuple[int, ...]
     position_ids: tuple[int, ...]
     place_ids: tuple[int, ...]
+    sex_type_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ def _load_source_entries(source_key: str, db_path: Path) -> list[SourceEntryReco
                 "entry_partner",
                 "entry_position",
                 "entry_place",
+                "entry_sex_type",
                 "partners",
                 "positions",
             },
@@ -83,6 +85,7 @@ def _load_source_entries(source_key: str, db_path: Path) -> list[SourceEntryReco
         partner_map = _group_rows(conn, "entry_partner", "entry_id", "partner_id")
         position_map = _group_rows(conn, "entry_position", "entry_id", "position_id")
         place_map = _group_rows(conn, "entry_place", "entry_id", "place_id")
+        sex_type_map = _group_rows(conn, "entry_sex_type", "entry_id", "sex_type_id")
 
         return [
             SourceEntryRecord(
@@ -101,6 +104,7 @@ def _load_source_entries(source_key: str, db_path: Path) -> list[SourceEntryReco
                 partner_ids=tuple(partner_map.get(int(row["entry_id"]), ())),
                 position_ids=tuple(position_map.get(int(row["entry_id"]), ())),
                 place_ids=tuple(place_map.get(int(row["entry_id"]), ())),
+                sex_type_ids=tuple(sex_type_map.get(int(row["entry_id"]), ())),
             )
             for row in entry_rows
         ]
@@ -347,6 +351,13 @@ def _initialize_master_schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (report_id) REFERENCES event_reports(report_id)
         );
 
+        CREATE TABLE report_sex_types (
+            report_id INTEGER NOT NULL,
+            sex_type_id INTEGER NOT NULL,
+            PRIMARY KEY (report_id, sex_type_id),
+            FOREIGN KEY (report_id) REFERENCES event_reports(report_id)
+        );
+
         CREATE TABLE raw_source_objects (
             source_id INTEGER NOT NULL,
             object_type TEXT NOT NULL,
@@ -458,9 +469,9 @@ def _validate_existing_master_schema(conn: sqlite3.Connection) -> None:
     if row is None:
         raise ValueError("Existing output DB is missing metadata.schema_version; not a compatible master DB")
     version = str(row[0])
-    if version != "3":
+    if version != "4":
         raise ValueError(
-            f"Existing output DB has schema_version={version}, but this importer expects schema_version=3"
+            f"Existing output DB has schema_version={version}, but this importer expects schema_version=4"
         )
 
 
@@ -552,7 +563,7 @@ def _insert_metadata(conn: sqlite3.Connection, duration_tolerance: int) -> None:
     conn.executemany(
         "INSERT INTO metadata (key, value) VALUES (?, ?)",
         [
-            ("schema_version", "3"),
+            ("schema_version", "4"),
             ("duration_tolerance", str(duration_tolerance)),
             ("match_strategy", "same_date_plus_duration_tolerance"),
             ("source_snapshot_mode", "full_sqlite_object_and_row_snapshot"),
@@ -786,6 +797,12 @@ def build_master_database(
                 conn.execute(
                     "INSERT OR IGNORE INTO report_places (report_id, place_id) VALUES (?, ?)",
                     (report_id, place_id),
+                )
+
+            for sex_type_id in entry.sex_type_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO report_sex_types (report_id, sex_type_id) VALUES (?, ?)",
+                    (report_id, sex_type_id),
                 )
 
         conn.execute(

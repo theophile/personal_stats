@@ -13,7 +13,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - exercised in dependency-limited environments
     pd = None
 
-from webapp.db import ReadOnlyDatabase
+from webapp.db import ReadOnlyDatabase, WritableDatabase
 
 
 def _loess_smooth(x: "pd.Series", y: "pd.Series", frac: float = 0.3) -> "pd.Series":
@@ -83,6 +83,27 @@ PLACE_MAPPING = {
 ROOM_IDS = set(range(0, 10))
 LOCATION_IDS = set(range(10, 23))
 
+SEX_TYPE_MAPPING = {
+    0: "Vaginal",
+    1: "Oral",
+    2: "Handjob",
+    3: "Masturbation",
+    4: "Finger",
+    5: "Toy",
+    6: "Anal",
+    7: "Group",
+    8: "Active",
+    9: "Passive",
+    10: "BDSM",
+}
+
+INITIATOR_MAPPING = {
+    0: "Spontaneously",
+    1: "Me",
+    2: "My Partner",
+    3: "Both of Us",
+}
+
 
 class DataSourceError(RuntimeError):
     """Raised when the configured SQLite file is missing expected tables."""
@@ -121,6 +142,7 @@ class StatsService:
             "report_partners",
             "report_positions",
             "report_places",
+            "report_sex_types",
             "people",
             "canonical_positions",
         }
@@ -161,6 +183,10 @@ class StatsService:
 
     def _place_ids_for_entry(self, cur: sqlite3.Cursor, entry_id: int) -> list[int]:
         sql = "SELECT place_id FROM report_places WHERE report_id = ?"
+        return [int(r[0]) for r in cur.execute(sql, (entry_id,)).fetchall()]
+
+    def _sex_type_ids_for_entry(self, cur: sqlite3.Cursor, entry_id: int) -> list[int]:
+        sql = "SELECT sex_type_id FROM report_sex_types WHERE report_id = ?"
         return [int(r[0]) for r in cur.execute(sql, (entry_id,)).fetchall()]
 
     def people_options(self) -> list[tuple[int, str]]:
@@ -269,6 +295,9 @@ class StatsService:
                     entry["partners"] = ", ".join(people_involved)
                     entry["positions"] = ", ".join(position_map.get(i, f"Unknown({i})") for i in position_ids)
                     entry["places"] = ", ".join(PLACE_MAPPING.get(i, f"Unknown({i})") for i in place_ids)
+                    sex_type_ids = self._sex_type_ids_for_entry(cur, int(entry_id))
+                    entry["sex_types"] = ", ".join(SEX_TYPE_MAPPING.get(i, f"Unknown({i})") for i in sex_type_ids)
+                    entry["sex_type_ids"] = sex_type_ids
                     entry["person_orgasms"] = self._row_person_orgasms(cur, entry, partner_map)
 
             return entries
@@ -896,6 +925,153 @@ class StatsService:
             "least_month": least_month,
             "least_month_count": least_month_count,
         }
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Write operations
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def _writable_db(self) -> "WritableDatabase":
+        return WritableDatabase(self.db.db_path)
+
+    def backup_db(self) -> Path:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = (
+            self.db.db_path.parent
+            / f"{self.db.db_path.stem}_backup_{ts}{self.db.db_path.suffix}"
+        )
+        self._writable_db().backup(backup_path)
+        return backup_path
+
+    def fetch_entry_for_edit(self, entry_id: int) -> dict:
+        """Return a single entry with raw IDs for the edit form."""
+        self.ensure_expected_schema()
+        try:
+            with self.db.cursor() as cur:
+                row = cur.execute(
+                    """SELECT e.report_id AS entry_id, ev.event_date AS date,
+                              e.reporter_person_id, e.duration, e.note, e.rating,
+                              e.initiator, e.safety_status,
+                              e.total_org, e.total_org_partner
+                       FROM event_reports e
+                       JOIN events ev ON ev.event_id = e.event_id
+                       WHERE e.report_id = ?""",
+                    (entry_id,),
+                ).fetchone()
+                if row is None:
+                    raise DataSourceError(f"Entry {entry_id} not found")
+                data = dict(row)
+                data["partner_ids"]  = self._partner_ids_for_entry(cur, entry_id)
+                data["position_ids"] = self._position_ids_for_entry(cur, entry_id)
+                data["place_ids"]    = self._place_ids_for_entry(cur, entry_id)
+                data["sex_type_ids"] = self._sex_type_ids_for_entry(cur, entry_id)
+                # Use _row_person_orgasms to get the same computed values shown
+                # in the table view. orgasms_attributed is NULL for merge-created
+                # rows, so reading it raw always yields empty fields.
+                person_map = self._fetch_id_name_map("partners")
+                computed = self._row_person_orgasms(cur, data, person_map)
+                # computed is {name: count}; remap to {person_id: count} for the form
+                name_to_pid = {name: pid for pid, name in person_map.items()}
+                data["partner_orgasms"] = {
+                    name_to_pid[name]: count
+                    for name, count in computed.items()
+                    if name in name_to_pid and int(name_to_pid[name]) in data["partner_ids"]
+                }
+            return data
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to fetch entry for edit: {exc}") from exc
+
+    def update_entry(
+        self,
+        entry_id: int,
+        *,
+        date: str,
+        duration: int | None,
+        rating: int | None,
+        note: str | None,
+        initiator: int | None,
+        sex_type_ids: list[int],
+        total_org: int,
+        total_org_partner: int,
+        reporter_person_id: int,
+        partner_ids: list[int],
+        partner_orgasms: dict[int, int | None],
+        position_ids: list[int],
+        place_ids: list[int],
+    ) -> None:
+        """Persist all editable fields for one entry atomically."""
+        wdb = self._writable_db()
+        try:
+            with wdb.transaction() as conn:
+                cur = conn.cursor()
+
+                cur.execute(
+                    """UPDATE event_reports
+                       SET duration = ?, rating = ?, note = ?,
+                           initiator = ?,
+                           total_org = ?, total_org_partner = ?,
+                           reporter_person_id = ?
+                       WHERE report_id = ?""",
+                    (duration, rating, note or None,
+                     initiator,
+                     total_org, total_org_partner,
+                     reporter_person_id, entry_id),
+                )
+
+                cur.execute(
+                    "UPDATE events SET event_date = ? "
+                    "WHERE event_id = ("
+                    "  SELECT event_id FROM event_reports WHERE report_id = ?)",
+                    (date, entry_id),
+                )
+
+                cur.execute("DELETE FROM report_partners  WHERE report_id = ?", (entry_id,))
+                for pid in partner_ids:
+                    cur.execute(
+                        "INSERT INTO report_partners "
+                        "(report_id, partner_person_id, orgasms_attributed) VALUES (?, ?, ?)",
+                        (entry_id, pid, partner_orgasms.get(pid)),
+                    )
+
+                cur.execute("DELETE FROM report_positions WHERE report_id = ?", (entry_id,))
+                for pos_id in position_ids:
+                    cur.execute(
+                        "INSERT INTO report_positions "
+                        "(report_id, canonical_position_id) VALUES (?, ?)",
+                        (entry_id, pos_id),
+                    )
+
+                cur.execute("DELETE FROM report_places   WHERE report_id = ?", (entry_id,))
+                for place_id in place_ids:
+                    cur.execute(
+                        "INSERT INTO report_places (report_id, place_id) VALUES (?, ?)",
+                        (entry_id, place_id),
+                    )
+
+                cur.execute("DELETE FROM report_sex_types WHERE report_id = ?", (entry_id,))
+                for st_id in sex_type_ids:
+                    cur.execute(
+                        "INSERT INTO report_sex_types (report_id, sex_type_id) VALUES (?, ?)",
+                        (entry_id, st_id),
+                    )
+
+                # Keep events.approx_duration in sync when only one report exists
+                cur.execute(
+                    """UPDATE events SET approx_duration = ?
+                       WHERE event_id = (
+                           SELECT event_id FROM event_reports WHERE report_id = ?
+                       ) AND (
+                           SELECT COUNT(*) FROM event_reports er2
+                           WHERE er2.event_id = (
+                               SELECT event_id FROM event_reports WHERE report_id = ?
+                           )
+                       ) = 1""",
+                    (duration, entry_id, entry_id),
+                )
+        except sqlite3.Error as exc:
+            raise DataSourceError(f"Failed to update entry {entry_id}: {exc}") from exc
+        finally:
+            wdb.close()
 
     def export_report_json(self, filters: SearchFilters) -> Path:
         report = self.build_report(filters)
